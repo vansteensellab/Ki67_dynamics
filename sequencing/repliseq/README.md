@@ -1,4 +1,6 @@
-All the scripts for Repli-seq data processing and simple analyses.
+#### Repli-seq scripts
+
+All the scripts for Repli-seq data processing and simple downstream analyses.
 
 The initial data processing is described in "ts210802c_process_replication_timing.sh". Further processing of the data was done with R markdown files:
 

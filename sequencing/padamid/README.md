@@ -1,3 +1,5 @@
+#### pA-DamID scripts
+
 All the scripts for pA-DamID data processing and analyses.
 
 The Snakemake pipeline can be found in "bin", where "snakemake/damid.snake" contains the actual snakemake pipeline and "snakemake/config.yaml" contains the sample information and parameters. Further processing of the data was done with R markdown files:
