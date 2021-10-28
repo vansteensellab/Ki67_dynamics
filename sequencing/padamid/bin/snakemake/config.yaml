@@ -1,0 +1,1578 @@
+###############################################################################
+## snakemake config - damid pipeline ##########################################
+###############################################################################
+## Tom van Schaik
+## 171120
+## version 1.3
+
+# Introduction snakemake:
+# Snakemake is a bioinformatics pipeline tool written in python. It follows the 
+# 'make'-logic: you determine rules with which files can be generated, and 
+# which input files these require. Snakemake will try to execute the first rule
+# given, and execute other rules based on the input the final rule requires. 
+# In this way, you have a pipeline. 
+# Some cool features of snakemake:
+# - You give input and output file names, and snakemake will do the rest.
+# - If a rule gives an error, the output file is automatically removed, to 
+#   prevent "partial" data files.
+# - Given a number of cores to snakemake, it will automatically parallelize 
+#   things when possible. 
+# - You can create a fancy workflow overview picture.
+
+# This is the config file for a damid snakemake pipeline, where you list 
+# parameters which will be used in the pipeline.
+
+# Versions:
+# 1.0 - Initial version
+# 1.1 - Updated pipeline
+# 1.2 - Added replicates + changed basename scheme
+# 1.3 - Changed mapping to bwa mem for 4DN compatibility
+
+###############################################################################
+### Parameters and file locations #############################################
+###############################################################################
+
+# Parsing
+read_parser: bin/read_parser/read_parser.py
+read_structure: bin/read_parser/read_structure.txt
+conda_parser: /home/t.v.schaik/mydata/proj/3D_nucleus/results/ts200921_LaminaNucleolus_AdditionalExperiments/bin/read_parser/conda_parser.yaml
+
+# Mapping
+mapper: bin/mapping/mapping_bwa.sh
+genome_index: /home/t.v.schaik/mydata/data/genomes/GRCh38/ENCODE/GRCh38_rDNA
+conda_mapping: /home/t.v.schaik/mydata/proj/3D_nucleus/results/ts200921_LaminaNucleolus_AdditionalExperiments/bin/mapping/conda_mapping.yaml
+
+# Counting
+gatc_counting: bin/gatc_counting/gatc_counting.R
+gatc_gff: /home/t.v.schaik/mydata/data/genomes/GRCh38/ENCODE/GRCh38_gatc_fragments.gff
+bins: "5,10,20,25,50,80,100,160,250"
+#bins: "1,2,5,10,20,25,50,80,100,250"
+
+# Normalizing
+normalize_damid: bin/normalization/normalize_damid.R
+normalize_method: dam-log2
+pseudo: 1
+combine_replicates: bin/normalization/combine_replicates.R
+
+# Tracks
+bed2bigwig: bin/data_tracks/bed2BigWig.R
+chrom_sizes: /home/t.v.schaik/mydata/data/genomes/GRCh38/hg38.chrom.sizes
+
+# HMM
+hmm_calling: "bin/HMM_calling/HMM.R"
+
+# File report - the locations should be relative from the snakemake file
+report_relative_location: "./"    # required for previous versions of snakemake
+file_report: "../../bin/reports/experiment_statistics.Rmd"
+replicate_report: "../../bin/reports/replicate_statistics.Rmd"
+centromeres_bed: "bin/reports/ts171110_hg38_centromeres.bed.gz"
+
+# Statistics
+gather_statistics: "bin/statistics/gather_statistics.R"
+merge_statistics: "bin/statistics/merge_statistics.R"
+
+###############################################################################
+### Input and output ##########################################################
+###############################################################################
+
+# Note #1: use spaces instead of tabs for some reason!
+
+# Output directories
+output_dir: "results"
+
+out_parse: parsed
+out_map: mapped
+out_count: counts
+out_norm: normalized
+out_tracks_norm: tracks/normalized
+out_tracks_counts: tracks/counts
+out_hmm: "HMM"
+out_report_experiment: "reports/experiment"
+out_report_replicate: "reports/replicate"
+out_statistics: statistics
+
+
+# Basename target to basename dam-only control list
+basenames:
+
+  #####################################
+  ### HCT116 ActD #####################
+  #####################################
+
+  # Replicate 1
+  HCT116_ActD_DMSO_r1_Dam:
+    - /shared/gcf/t.v.schaik/6146/fastq_files/6146_1_pADamID_HCT116_DMSO_Dam_AAACATCG_S21_R1_001.fastq.gz
+    - /shared/gcf/t.v.schaik/6227/fastq_files/6227_11_pADamID_HCT116_DMSO_Dam_ts200901_AAACATCG_S12_R1_001.fastq.gz
+  HCT116_ActD_DMSO_r1_pADam:
+    - /shared/gcf/t.v.schaik/6146/fastq_files/6146_2_pADamID_HCT116_DMSO_pA-Dam_ACATTGGC_S24_R1_001.fastq.gz
+  HCT116_ActD_DMSO_r1_LMNB1:
+    - /shared/gcf/t.v.schaik/6146/fastq_files/6146_3_pADamID_HCT116_DMSO_LMNB1_ACCACTGT_S23_R1_001.fastq.gz
+    - /shared/gcf/t.v.schaik/6227/fastq_files/6227_12_pADamID_HCT116_DMSO_LMNB1_ts200901_ACCACTGT_S6_R1_001.fastq.gz
+  HCT116_ActD_DMSO_r1_MKI67IP:
+    - /shared/gcf/t.v.schaik/6146/fastq_files/6146_4_pADamID_HCT116_DMSO_MKI67IP_AACGTGAT_S27_R1_001.fastq.gz
+  HCT116_ActD_DMSO_r1_NCL:
+    - /shared/gcf/t.v.schaik/6146/fastq_files/6146_5_pADamID_HCT116_DMSO_NCL_CGCTGATC_S28_R1_001.fastq.gz
+  HCT116_ActD_DMSO_r1_Ki67:
+    - /shared/gcf/t.v.schaik/6146/fastq_files/6146_6_pADamID_HCT116_DMSO_Ki67_CAGATCTG_S26_R1_001.fastq.gz
+    - /shared/gcf/t.v.schaik/6227/fastq_files/6227_13_pADamID_HCT116_DMSO_Ki67_ts200901_CAGATCTG_S13_R1_001.fastq.gz
+  HCT116_ActD_50ng_r1_Dam:
+    - /shared/gcf/t.v.schaik/6146/fastq_files/6146_7_pADamID_HCT116_ActD_Dam_ATGCCTAA_S31_R1_001.fastq.gz
+    - /shared/gcf/t.v.schaik/6227/fastq_files/6227_14_pADamID_HCT116_ActD_Dam_ts200901_ATGCCTAA_S14_R1_001.fastq.gz
+  HCT116_ActD_50ng_r1_pADam:
+    - /shared/gcf/t.v.schaik/6146/fastq_files/6146_8_pADamID_HCT116_ActD_pA-Dam_CTGTAGCC_S33_R1_001.fastq.gz
+  HCT116_ActD_50ng_r1_LMNB1:
+    - /shared/gcf/t.v.schaik/6146/fastq_files/6146_9_pADamID_HCT116_ActD_LMNB1_AGTACAAG_S32_R1_001.fastq.gz
+    - /shared/gcf/t.v.schaik/6227/fastq_files/6227_15_pADamID_HCT116_ActD_LMNB1_ts200901_AGTACAAG_S15_R1_001.fastq.gz
+  HCT116_ActD_50ng_r1_MKI67IP:
+    - /shared/gcf/t.v.schaik/6146/fastq_files/6146_10_pADamID_HCT116_ActD_MKI67IP_CATCAAGT_S30_R1_001.fastq.gz
+  HCT116_ActD_50ng_r1_NCL:
+    - /shared/gcf/t.v.schaik/6146/fastq_files/6146_11_pADamID_HCT116_ActD_NCL_AGTGGTCA_S34_R1_001.fastq.gz
+  HCT116_ActD_50ng_r1_Ki67:
+    - /shared/gcf/t.v.schaik/6146/fastq_files/6146_12_pADamID_HCT116_ActD_Ki67_AACAACCA_S35_R1_001.fastq.gz
+    - /shared/gcf/t.v.schaik/6227/fastq_files/6227_16_pADamID_HCT116_ActD_Ki67_ts200901_AACAACCA_S16_R1_001.fastq.gz
+  
+  # Replicate 2
+  HCT116_wt_r2_Dam:
+    - /shared/gcf/t.v.schaik/6192/fastq_files/6192_12_pADamID_HCT116_wt_Dam_ACGCTCGA_S12_R1_001.fastq.gz
+  HCT116_wt_r2_LMNB1:
+    - /shared/gcf/t.v.schaik/6192/fastq_files/6192_13_pADamID_HCT116_wt_LMNB1_ACGTATCA_S13_R1_001.fastq.gz
+  HCT116_wt_r2_Ki67:
+    - /shared/gcf/t.v.schaik/6192/fastq_files/6192_14_pADamID_HCT116_wt_Ki67_ACTATGCA_S14_R1_001.fastq.gz
+  
+  HCT116_ActD_DMSO_r2_Dam:
+    - /shared/gcf/t.v.schaik/6193/fastq_files/6193_1_pADamID_HCT116_DMSO_Dam_AGAGTCAA_S16_R1_001.fastq.gz
+  HCT116_ActD_DMSO_r2_LMNB1:
+    - /shared/gcf/t.v.schaik/6193/fastq_files/6193_2_pADamID_HCT116_DMSO_LMNB1_AGATCGCA_S19_R1_001.fastq.gz
+  HCT116_ActD_DMSO_r2_Ki67:
+    - /shared/gcf/t.v.schaik/6193/fastq_files/6193_3_pADamID_HCT116_DMSO_Ki67_AGCAGGAA_S18_R1_001.fastq.gz
+  HCT116_ActD_DMSO_r2_H3K9me3:
+    - /shared/gcf/t.v.schaik/6193/fastq_files/6193_4_pADamID_HCT116_DMSO_H3K9me3_AGTCACTA_S20_R1_001.fastq.gz
+  HCT116_ActD_50ng_r2_Dam:
+    - /shared/gcf/t.v.schaik/6193/fastq_files/6193_5_pADamID_HCT116_ActD_Dam_ATCCTGTA_S21_R1_001.fastq.gz
+  HCT116_ActD_50ng_r2_LMNB1:
+    - /shared/gcf/t.v.schaik/6193/fastq_files/6193_6_pADamID_HCT116_ActD_LMNB1_ATTGAGGA_S22_R1_001.fastq.gz
+  HCT116_ActD_50ng_r2_Ki67:
+    - /shared/gcf/t.v.schaik/6193/fastq_files/6193_7_pADamID_HCT116_ActD_Ki67_CAACCACA_S23_R1_001.fastq.gz
+  HCT116_ActD_50ng_r2_H3K9me3:
+    - /shared/gcf/t.v.schaik/6193/fastq_files/6193_8_pADamID_HCT116_ActD_H3K9me3_CAAGACTA_S15_R1_001.fastq.gz
+  
+  # Replicate 3 - ts201123 + ts210104
+  HCT116_wt_r3_Dam:
+    - /shared/gcf/t.v.schaik/6227/fastq_files/6227_9_pADamID_HCT116_wt_Dam_GCGAGTAA_S1_R1_001.fastq.gz
+  HCT116_wt_r3_Ki67:
+    - /shared/gcf/t.v.schaik/6227/fastq_files/6227_10_pADamID_HCT116_wt_Ki67_GCTAACGA_S3_R1_001.fastq.gz
+  
+  HCT116_ActD_DMSO_r3_Dam:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_28_pADamID_HCT116_DMSO_Dam_ATTGAGGA_S38_R1_001.fastq.gz
+  HCT116_ActD_DMSO_r3_H3K9me3:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_29_pADamID_HCT116_DMSO_H3K9me3_CAACCACA_S39_R1_001.fastq.gz
+  HCT116_ActD_50ng_r3_Dam:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_30_pADamID_HCT116_ActD_Dam_CAAGACTA_S40_R1_001.fastq.gz
+  HCT116_ActD_50ng_r3_H3K9me3:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_31_pADamID_HCT116_ActD_H3K9me3_CACTTCGA_S41_R1_001.fastq.gz
+  
+  # Replicate 4 + 5 - ts210104
+  HCT116_wt_r4_Dam:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_1_pADamID_HCT116_wt_r1_Dam_ACACAGAA_S3_R1_001.fastq.gz
+  HCT116_wt_r4_H3K27me3:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_2_pADamID_HCT116_wt_r1_H3K27me3_ACAGCAGA_S6_R1_001.fastq.gz
+  HCT116_ActD_DMSO_r4_Dam:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_3_pADamID_HCT116_DMSO_r1_Dam_ACCTCCAA_S5_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_9_HCT116_ActD_DMSO_r4_Dam_ACCTCCAA_S43_R1_001.fastq.gz
+  HCT116_ActD_DMSO_r4_H3K27me3:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_4_pADamID_HCT116_DMSO_r1_H3K27me3_ACGCTCGA_S9_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_10_HCT116_ActD_DMSO_r4_H3K27me3_ACGCTCGA_S40_R1_001.fastq.gz
+  HCT116_ActD_50ng_r4_Dam:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_5_pADamID_HCT116_ActD_r1_Dam_ACGTATCA_S10_R1_001.fastq.gz
+  HCT116_ActD_50ng_r4_H3K27me3:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_6_pADamID_HCT116_ActD_r1_H3K27me3_ACTATGCA_S8_R1_001.fastq.gz
+  
+  HCT116_wt_r5_Dam:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_11_pADamID_HCT116_wt_r2_Dam_ATCCTGTA_S18_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_11_HCT116_wt_r5_Dam_ATCCTGTA_S46_R1_001.fastq.gz
+  HCT116_wt_r5_H3K27me3:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_12_pADamID_HCT116_wt_r2_H3K27me3_ATTGAGGA_S19_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_14_HCT116_wt_r5_H3K27me3_ATTGAGGA_S31_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_14_HCT116_wt_r5_H3K27me3_ATTGAGGA_S15_R1_001.fastq.gz
+  HCT116_ActD_DMSO_r5_Dam:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_13_pADamID_HCT116_DMSO_r2_Dam_CAACCACA_S20_R1_001.fastq.gz
+  HCT116_ActD_DMSO_r5_H3K27me3:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_14_pADamID_HCT116_DMSO_r2_H3K27me3_CAAGACTA_S21_R1_001.fastq.gz
+  HCT116_ActD_50ng_r5_Dam:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_15_pADamID_HCT116_ActD_r2_Dam_CACTTCGA_S17_R1_001.fastq.gz
+  HCT116_ActD_50ng_r5_H3K27me3:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_16_pADamID_HCT116_ActD_r2_H3K27me3_CAGCGTTA_S26_R1_001.fastq.gz
+  
+  # Replicate 6 - ts210412
+  HCT116_wt_r6_Dam:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_19_pADamID_HCT116_wt_r1_Dam_CTGGCATA_S24_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_21_HCT116_wt_r6_Dam_CTGGCATA_S22_R1_001.fastq.gz
+  HCT116_wt_r6_Ki67:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_20_pADamID_HCT116_wt_r1_Ki67_GAATCTGA_S22_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_22_HCT116_wt_r6_Ki67_GAATCTGA_S15_R1_001.fastq.gz
+  
+  # Replicate 7&8 - ts210518
+  HCT116_wt_r7_Dam:
+    - /shared/gcf/m.eder/6443/fastq_files/6443_1_pADamID_HCT116_wt_r1_Dam_CTCAATGA_S18_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_1_pADamID_HCT116_wt_r1_Dam_CTCAATGA_S2_R1_001.fastq.gz
+  HCT116_wt_r7_Ki67HPA:
+    - /shared/gcf/m.eder/6443/fastq_files/6443_2_pADamID_HCT116_wt_r1_Ki67HPA_CTGGCATA_S21_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_2_pADamID_HCT116_wt_r1_Ki67HPA_CTGGCATA_S5_R1_001.fastq.gz
+  HCT116_wt_r7_Ki67NOV:
+    - /shared/gcf/m.eder/6443/fastq_files/6443_3_pADamID_HCT116_wt_r1_Ki67NOV_GAATCTGA_S20_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_3_pADamID_HCT116_wt_r1_Ki67NOV_GAATCTGA_S4_R1_001.fastq.gz
+  HCT116_wt_r8_Dam:
+    - /shared/gcf/m.eder/6443/fastq_files/6443_4_pADamID_HCT116_wt_r2_Dam_GCTCGGTA_S24_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_4_pADamID_HCT116_wt_r2_Dam_GCTCGGTA_S8_R1_001.fastq.gz
+  HCT116_wt_r8_Ki67HPA:
+    - /shared/gcf/m.eder/6443/fastq_files/6443_5_pADamID_HCT116_wt_r2_Ki67HPA_GGAGAACA_S25_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_5_pADamID_HCT116_wt_r2_Ki67HPA_GGAGAACA_S9_R1_001.fastq.gz
+  HCT116_wt_r8_Ki67NOV:
+    - /shared/gcf/m.eder/6443/fastq_files/6443_6_pADamID_HCT116_wt_r2_Ki67NOV_GGTGCGAA_S23_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_6_pADamID_HCT116_wt_r2_Ki67NOV_GGTGCGAA_S7_R1_001.fastq.gz
+  
+  
+  #####################################
+  ### HCT116 Ki67-KD ##################
+  #####################################
+
+  # Replicate 1 - ts201123
+  HCT116_SC_r1_Dam:
+    - /shared/gcf/t.v.schaik/6228/fastq_files/6228_1_pADamID_HCT116_SC_Dam_GCTCGGTA_S19_R1_001.fastq.gz
+  HCT116_SC_r1_LMNB1:
+    - /shared/gcf/t.v.schaik/6228/fastq_files/6228_2_pADamID_HCT116_SC_LMNB1_GGAGAACA_S20_R1_001.fastq.gz
+  HCT116_SC_r1_H3K27me3:
+    - /shared/gcf/t.v.schaik/6228/fastq_files/6228_3_pADamID_HCT116_SC_H3K27me3_GTACGCAA_S21_R1_001.fastq.gz
+  HCT116_SC_r1_H3K9me3:
+    - /shared/gcf/t.v.schaik/6228/fastq_files/6228_4_pADamID_HCT116_SC_H3K9me3_GTCGTAGA_S22_R1_001.fastq.gz
+  HCT116_Ki67KD_r1_Dam:
+    - /shared/gcf/t.v.schaik/6228/fastq_files/6228_5_pADamID_HCT116_Ki67KD_Dam_GTCTGTCA_S23_R1_001.fastq.gz
+  HCT116_Ki67KD_r1_LMNB1:
+    - /shared/gcf/t.v.schaik/6228/fastq_files/6228_6_pADamID_HCT116_Ki67KD_LMNB1_GTGTTCTA_S18_R1_001.fastq.gz
+  HCT116_Ki67KD_r1_H3K27me3:
+    - /shared/gcf/t.v.schaik/6228/fastq_files/6228_7_pADamID_HCT116_Ki67KD_H3K27me3_TATCAGCA_S24_R1_001.fastq.gz
+  HCT116_Ki67KD_r1_H3K9me3:
+    - /shared/gcf/t.v.schaik/6228/fastq_files/6228_8_pADamID_HCT116_Ki67KD_H3K9me3_TCCGTCTA_S25_R1_001.fastq.gz
+    
+  HCT116_SC_r1_LMNB1_wtDam:
+    - /shared/gcf/t.v.schaik/6228/fastq_files/6228_2_pADamID_HCT116_SC_LMNB1_GGAGAACA_S20_R1_001.fastq.gz
+  HCT116_SC_r1_H3K27me3_wtDam:
+    - /shared/gcf/t.v.schaik/6228/fastq_files/6228_3_pADamID_HCT116_SC_H3K27me3_GTACGCAA_S21_R1_001.fastq.gz
+  HCT116_SC_r1_H3K9me3_wtDam:
+    - /shared/gcf/t.v.schaik/6228/fastq_files/6228_4_pADamID_HCT116_SC_H3K9me3_GTCGTAGA_S22_R1_001.fastq.gz
+  HCT116_Ki67KD_r1_LMNB1_wtDam:
+    - /shared/gcf/t.v.schaik/6228/fastq_files/6228_6_pADamID_HCT116_Ki67KD_LMNB1_GTGTTCTA_S18_R1_001.fastq.gz
+  HCT116_Ki67KD_r1_H3K27me3_wtDam:
+    - /shared/gcf/t.v.schaik/6228/fastq_files/6228_7_pADamID_HCT116_Ki67KD_H3K27me3_TATCAGCA_S24_R1_001.fastq.gz
+  HCT116_Ki67KD_r1_H3K9me3_wtDam:
+    - /shared/gcf/t.v.schaik/6228/fastq_files/6228_8_pADamID_HCT116_Ki67KD_H3K9me3_TCCGTCTA_S25_R1_001.fastq.gz
+  
+  
+  #####################################
+  ### HCT116 Ki67-AID #################
+  #####################################
+  
+  # Replicate 1 - ts210104
+  HCT116_AID_ctrl_r1_Dam:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_15_pADamID_HCT116_AID_ctrl_Dam_AAGACGGA_S26_R1_001.fastq.gz
+  HCT116_AID_ctrl_r1_LMNB1:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_16_pADamID_HCT116_AID_ctrl_LMNB1_AAGGTACA_S11_R1_001.fastq.gz
+  HCT116_AID_ctrl_IAA_r1_Dam:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_17_pADamID_HCT116_AID_ctrl_IAA_Dam_ACACAGAA_S13_R1_001.fastq.gz
+  HCT116_AID_ctrl_IAA_r1_LMNB1:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_18_pADamID_HCT116_AID_ctrl_IAA_LMNB1_ACAGCAGA_S33_R1_001.fastq.gz
+  
+  HCT116_AID_thy_r1_Dam:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_19_pADamID_HCT116_AID_thy_Dam_ACCTCCAA_S16_R1_001.fastq.gz
+  HCT116_AID_thy_r1_LMNB1:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_20_pADamID_HCT116_AID_thy_LMNB1_ACGCTCGA_S32_R1_001.fastq.gz
+  HCT116_AID_thy_IAA_r1_Dam:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_21_pADamID_HCT116_AID_thy_IAA_Dam_ACGTATCA_S20_R1_001.fastq.gz
+  HCT116_AID_thy_IAA_r1_LMNB1:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_22_pADamID_HCT116_AID_thy_IAA_LMNB1_ACTATGCA_S34_R1_001.fastq.gz
+  
+  HCT116_AID_RO_IAA_r1_Dam:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_23_pADamID_HCT116_AID_RO_IAA_Dam_AGAGTCAA_S25_R1_001.fastq.gz
+  HCT116_AID_RO_IAA_r1_LMNB1:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_24_pADamID_HCT116_AID_RO_IAA_LMNB1_AGATCGCA_S35_R1_001.fastq.gz
+  
+  
+  # Replicate 2 - ts210104
+  HCT116_AID_ctrl_r2_Dam:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_21_pADamID_HCT116_Ki67AID_control_r1_Dam_CCTCCTGA_S4_R1_001.fastq.gz
+  HCT116_AID_ctrl_r2_LMNB1:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_22_pADamID_HCT116_Ki67AID_control_r1_LMNB1_CGAACTTA_S7_R1_001.fastq.gz
+  HCT116_AID_ctrl_r2_Ki67:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_23_pADamID_HCT116_Ki67AID_control_r1_Ki67_CGACTGGA_S30_R1_001.fastq.gz
+  HCT116_AID_ctrl_r2_H3K27me3:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_24_pADamID_HCT116_Ki67AID_control_r1_H3K27me3_CGCATACA_S11_R1_001.fastq.gz
+  HCT116_AID_ctrl_r2_H3K9me3:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_25_pADamID_HCT116_Ki67AID_control_r1_H3K9me3_CTCAATGA_S29_R1_001.fastq.gz
+  
+  HCT116_AID_ctrl_IAA_r2_Dam:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_26_pADamID_HCT116_Ki67AID_control_IAA_r1_Dam_CTGAGCCA_S28_R1_001.fastq.gz
+  HCT116_AID_ctrl_IAA_r2_LMNB1:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_27_pADamID_HCT116_Ki67AID_control_IAA_r1_LMNB1_CTGGCATA_S16_R1_001.fastq.gz
+  HCT116_AID_ctrl_IAA_r2_Ki67:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_28_pADamID_HCT116_Ki67AID_control_IAA_r1_Ki67_GAATCTGA_S31_R1_001.fastq.gz
+  HCT116_AID_ctrl_IAA_r2_H3K27me3:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_29_pADamID_HCT116_Ki67AID_control_IAA_r1_H3K27me3_GACTAGTA_S32_R1_001.fastq.gz
+  HCT116_AID_ctrl_IAA_r2_H3K9me3:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_30_pADamID_HCT116_Ki67AID_control_IAA_r1_H3K9me3_GAGCTGAA_S22_R1_001.fastq.gz
+  
+  HCT116_AID_thy_r2_Dam:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_31_pADamID_HCT116_Ki67AID_thymidine_r1_Dam_GATAGACA_S33_R1_001.fastq.gz
+  HCT116_AID_thy_r2_LMNB1:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_32_pADamID_HCT116_Ki67AID_thymidine_r1_LMNB1_GCCACATA_S27_R1_001.fastq.gz
+  HCT116_AID_thy_IAA_r2_Dam:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_33_pADamID_HCT116_Ki67AID_thymidine_IAA_r1_Dam_GCGAGTAA_S34_R1_001.fastq.gz
+  HCT116_AID_thy_IAA_r2_LMNB1:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_34_pADamID_HCT116_Ki67AID_thymidine_IAA_r1_LMNB1_GCTAACGA_S35_R1_001.fastq.gz
+  
+  HCT116_AID_RO_IAA_r2_Dam:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_35_pADamID_HCT116_Ki67AID_RO_IAA_r1_Dam_GCTCGGTA_S36_R1_001.fastq.gz
+  HCT116_AID_RO_IAA_r2_LMNB1:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_36_pADamID_HCT116_Ki67AID_RO_IAA_r1_LMNB1_GGAGAACA_S37_R1_001.fastq.gz
+  
+  HCT116_AID_RO_r2_Dam:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_37_pADamID_HCT116_Ki67AID_RO_r1_Dam_GGTGCGAA_S38_R1_001.fastq.gz
+  HCT116_AID_RO_r2_LMNB1:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_38_pADamID_HCT116_Ki67AID_RO_r1_LMNB1_GTACGCAA_S39_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_1_HCT116_AID_RO_r2_LMNB1_GTACGCAA_S2_R1_001.fastq.gz
+  
+  
+  # Replicate 3 - ts210104
+  HCT116_AID_ctrl_r3_Dam:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_15_pADamID_HCT116_Ki67AID_control_r2_Dam_ACGTATCA_S55_R1_001.fastq.gz
+  HCT116_AID_ctrl_r3_LMNB1:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_16_pADamID_HCT116_Ki67AID_control_r2_LMNB1_ACTATGCA_S64_R1_001.fastq.gz
+  HCT116_AID_ctrl_r3_Ki67:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_17_pADamID_HCT116_Ki67AID_control_r2_Ki67_AGAGTCAA_S65_R1_001.fastq.gz
+  HCT116_AID_ctrl_r3_H3K27me3:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_18_pADamID_HCT116_Ki67AID_control_r2_H3K27me3_AGATCGCA_S63_R1_001.fastq.gz
+  HCT116_AID_ctrl_r3_H3K9me3:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_19_pADamID_HCT116_Ki67AID_control_r2_H3K9me3_AGCAGGAA_S62_R1_001.fastq.gz
+  
+  HCT116_AID_ctrl_IAA_r3_Dam:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_20_pADamID_HCT116_Ki67AID_control_IAA_r2_Dam_AGTCACTA_S61_R1_001.fastq.gz
+  HCT116_AID_ctrl_IAA_r3_LMNB1:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_21_pADamID_HCT116_Ki67AID_control_IAA_r2_LMNB1_ATCCTGTA_S40_R1_001.fastq.gz
+  HCT116_AID_ctrl_IAA_r3_Ki67:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_22_pADamID_HCT116_Ki67AID_control_IAA_r2_Ki67_ATTGAGGA_S42_R1_001.fastq.gz
+  HCT116_AID_ctrl_IAA_r3_H3K27me3:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_23_pADamID_HCT116_Ki67AID_control_IAA_r2_H3K27me3_CAACCACA_S69_R1_001.fastq.gz
+  HCT116_AID_ctrl_IAA_r3_H3K9me3:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_24_pADamID_HCT116_Ki67AID_control_IAA_r2_H3K9me3_CAAGACTA_S45_R1_001.fastq.gz
+  
+  HCT116_AID_RO_r3_Dam:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_25_pADamID_HCT116_Ki67AID_RO_r2_Dam_CACTTCGA_S68_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_17_HCT116_AID_RO_r3_Dam_CACTTCGA_S33_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_17_HCT116_AID_RO_r3_Dam_CACTTCGA_S17_R1_001.fastq.gz
+  HCT116_AID_RO_r3_LMNB1:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_26_pADamID_HCT116_Ki67AID_RO_r2_LMNB1_CAGCGTTA_S49_R1_001.fastq.gz
+  
+  
+  # Replicate 4 - ts210412
+  HCT116_AID_doublethy_r4_Dam:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_1_pADamID_HCT116_Ki67AID_thymidine_r1_Dam_AGCAGGAA_S2_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_12_HCT116_AID_doublethy_r4_Dam_AGCAGGAA_S18_R1_001.fastq.gz
+  HCT116_AID_doublethy_r4_Ki67:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_2_pADamID_HCT116_Ki67AID_thymidine_r1_Ki67_AGTCACTA_S5_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_13_HCT116_AID_doublethy_r4_Ki67_AGTCACTA_S17_R1_001.fastq.gz
+  HCT116_AID_doublethy_r4_LMNB1:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_3_pADamID_HCT116_Ki67AID_thymidine_r1_LMNB1_ATCCTGTA_S4_R1_001.fastq.gz
+  HCT116_AID_doublethy_r4_H3K27me3:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_4_pADamID_HCT116_Ki67AID_thymidine_r1_H3K27me3_ATTGAGGA_S8_R1_001.fastq.gz
+  HCT116_AID_doublethy_r4_H3K9me3:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_5_pADamID_HCT116_Ki67AID_thymidine_r1_H3K9me3_CAACCACA_S9_R1_001.fastq.gz
+  
+  HCT116_AID_doublethy_IAA_r4_Dam:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_6_pADamID_HCT116_Ki67AID_thymidine_IAA_r1_Dam_CAAGACTA_S7_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_14_HCT116_AID_doublethy_IAA_r4_Dam_CAAGACTA_S16_R1_001.fastq.gz
+  HCT116_AID_doublethy_IAA_r4_Ki67:
+    #- /shared/gcf/m.eder/6392/fastq_files/6392_7_pADamID_HCT116_Ki67AID_thymidine_IAA_r1_Ki67_CACTTCGA_S12_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6392/fastq_files/6392_8_pADamID_HCT116_Ki67AID_thymidine_IAA_r1_LMNB1_CAGCGTTA_S13_R1_001.fastq.gz
+  HCT116_AID_doublethy_IAA_r4_LMNB1:
+    #- /shared/gcf/m.eder/6392/fastq_files/6392_8_pADamID_HCT116_Ki67AID_thymidine_IAA_r1_LMNB1_CAGCGTTA_S13_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6392/fastq_files/6392_9_pADamID_HCT116_Ki67AID_thymidine_IAA_r1_H3K27me3_CATACCAA_S14_R1_001.fastq.gz
+  HCT116_AID_doublethy_IAA_r4_H3K27me3:
+    #- /shared/gcf/m.eder/6392/fastq_files/6392_9_pADamID_HCT116_Ki67AID_thymidine_IAA_r1_H3K27me3_CATACCAA_S14_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6392/fastq_files/6392_7_pADamID_HCT116_Ki67AID_thymidine_IAA_r1_Ki67_CACTTCGA_S12_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_15_HCT116_AID_doublethy_IAA_r4_Ki67_CACTTCGA_S1_R1_001.fastq.gz
+  HCT116_AID_doublethy_IAA_r4_H3K9me3:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_10_pADamID_HCT116_Ki67AID_thymidine_IAA_r1_H3K9me3_CCAGTTCA_S11_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_16_HCT116_AID_doublethy_IAA_r4_H3K9me3_CCAGTTCA_S3_R1_001.fastq.gz
+  
+  HCT116_AID_RO_r4_Dam:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_11_pADamID_HCT116_Ki67AID_RO_r1_Dam_CCGAAGTA_S17_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_17_HCT116_AID_RO_r4_Dam_CCGAAGTA_S20_R1_001.fastq.gz
+  HCT116_AID_RO_r4_Ki67:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_12_pADamID_HCT116_Ki67AID_RO_r1_Ki67_CCGTGAGA_S18_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_18_HCT116_AID_RO_r4_Ki67_CCGTGAGA_S6_R1_001.fastq.gz
+  HCT116_AID_RO_r4_H3K27me3:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_13_pADamID_HCT116_Ki67AID_RO_r1_H3K27me3_CCTCCTGA_S19_R1_001.fastq.gz
+  HCT116_AID_RO_r4_H3K9me3:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_14_pADamID_HCT116_Ki67AID_RO_r1_H3K9me3_CGAACTTA_S20_R1_001.fastq.gz
+  
+  HCT116_AID_RO_IAA_r4_Dam:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_15_pADamID_HCT116_Ki67AID_RO_IAA_r1_Dam_CGACTGGA_S16_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_19_HCT116_AID_RO_IAA_r4_Dam_CGACTGGA_S21_R1_001.fastq.gz
+  HCT116_AID_RO_IAA_r4_Ki67:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_16_pADamID_HCT116_Ki67AID_RO_IAA_r1_Ki67_CGCATACA_S26_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_20_HCT116_AID_RO_IAA_r4_Ki67_CGCATACA_S10_R1_001.fastq.gz
+  HCT116_AID_RO_IAA_r4_H3K27me3:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_17_pADamID_HCT116_Ki67AID_RO_IAA_r1_H3K27me3_CTCAATGA_S25_R1_001.fastq.gz
+  HCT116_AID_RO_IAA_r4_H3K9me3:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_18_pADamID_HCT116_Ki67AID_RO_IAA_r1_H3K9me3_CTGAGCCA_S23_R1_001.fastq.gz
+  
+  # Replicate 5 - ts210412
+  HCT116_AID_doublethy_r5_Dam:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_23_pADamID_HCT116_Ki67AID_thymidine_r2_Dam_GATAGACA_S6_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_25_HCT116_AID_doublethy_r5_Dam_GATAGACA_S25_R1_001.fastq.gz
+  HCT116_AID_doublethy_r5_Ki67:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_24_pADamID_HCT116_Ki67AID_thymidine_r2_Ki67_GCCACATA_S30_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_26_HCT116_AID_doublethy_r5_Ki67_GCCACATA_S26_R1_001.fastq.gz
+  HCT116_AID_doublethy_r5_LMNB1:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_25_pADamID_HCT116_Ki67AID_thymidine_r2_LMNB1_GCGAGTAA_S10_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_27_HCT116_AID_doublethy_r5_LMNB1_GCGAGTAA_S27_R1_001.fastq.gz
+  HCT116_AID_doublethy_r5_H3K27me3:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_26_pADamID_HCT116_Ki67AID_thymidine_r2_H3K27me3_GCTAACGA_S29_R1_001.fastq.gz
+  HCT116_AID_doublethy_r5_H3K9me3:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_27_pADamID_HCT116_Ki67AID_thymidine_r2_H3K9me3_GCTCGGTA_S28_R1_001.fastq.gz
+  
+  HCT116_AID_doublethy_IAA_r5_Dam:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_28_pADamID_HCT116_Ki67AID_thymidine_IAA_r2_Dam_GGAGAACA_S15_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_28_HCT116_AID_doublethy_IAA_r5_Dam_GGAGAACA_S28_R1_001.fastq.gz
+  HCT116_AID_doublethy_IAA_r5_Ki67:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_29_pADamID_HCT116_Ki67AID_thymidine_IAA_r2_Ki67_GGTGCGAA_S31_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_29_HCT116_AID_doublethy_IAA_r5_Ki67_GGTGCGAA_S29_R1_001.fastq.gz
+  HCT116_AID_doublethy_IAA_r5_LMNB1:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_30_pADamID_HCT116_Ki67AID_thymidine_IAA_r2_LMNB1_GTACGCAA_S32_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_18_HCT116_AID_doublethy_IAA_r5_LMNB1_GTACGCAA_S34_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_18_HCT116_AID_doublethy_IAA_r5_LMNB1_GTACGCAA_S18_R1_001.fastq.gz
+  HCT116_AID_doublethy_IAA_r5_H3K27me3:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_31_pADamID_HCT116_Ki67AID_thymidine_IAA_r2_H3K27me3_GTCGTAGA_S21_R1_001.fastq.gz
+  HCT116_AID_doublethy_IAA_r5_H3K9me3:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_32_pADamID_HCT116_Ki67AID_thymidine_IAA_r2_H3K9me3_GTCTGTCA_S33_R1_001.fastq.gz
+  
+  HCT116_AID_RO_r5_Dam:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_33_pADamID_HCT116_Ki67AID_RO_r2_Dam_GTGTTCTA_S34_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_14_HCT116_AID_RO_r5_Dam_GTGTTCTA_S49_R1_001.fastq.gz
+  HCT116_AID_RO_r5_Ki67:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_34_pADamID_HCT116_Ki67AID_RO_r2_Ki67_TAGGATGA_S27_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_15_HCT116_AID_RO_r5_Ki67_TAGGATGA_S45_R1_001.fastq.gz
+  HCT116_AID_RO_r5_H3K27me3:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_35_pADamID_HCT116_Ki67AID_RO_r2_H3K27me3_TATCAGCA_S35_R1_001.fastq.gz
+  HCT116_AID_RO_r5_H3K9me3:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_36_pADamID_HCT116_Ki67AID_RO_r2_H3K9me3_TCCGTCTA_S36_R1_001.fastq.gz
+  
+  HCT116_AID_RO_IAA_r5_Dam:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_37_pADamID_HCT116_Ki67AID_RO_IAA_r2_Dam_TCTTCACA_S37_R1_001.fastq.gz
+  HCT116_AID_RO_IAA_r5_Ki67:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_38_pADamID_HCT116_Ki67AID_RO_IAA_r2_Ki67_TGAAGAGA_S38_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_19_HCT116_AID_RO_IAA_r5_Ki67_TGAAGAGA_S35_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_19_HCT116_AID_RO_IAA_r5_Ki67_TGAAGAGA_S19_R1_001.fastq.gz
+  HCT116_AID_RO_IAA_r5_H3K27me3:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_39_pADamID_HCT116_Ki67AID_RO_IAA_r2_H3K27me3_TGGAACAA_S39_R1_001.fastq.gz
+  HCT116_AID_RO_IAA_r5_H3K9me3:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_40_pADamID_HCT116_Ki67AID_RO_IAA_r2_H3K9me3_TGGCTTCA_S40_R1_001.fastq.gz
+  
+  
+  
+  
+  
+  #####################################
+  ### K562 ActD #####################
+  #####################################
+
+  # Replicate 1
+  K562_wt_r1_Dam:
+    - /shared/gcf/t.v.schaik/6192/fastq_files/6192_1_pADamID_K562_wt_Dam_AGTACAAG_S2_R1_001.fastq.gz
+  K562_wt_r1_LMNB1:
+    - /shared/gcf/t.v.schaik/6192/fastq_files/6192_2_pADamID_K562_wt_LMNB1_CATCAAGT_S5_R1_001.fastq.gz
+  K562_wt_r1_Ki67:
+    - /shared/gcf/t.v.schaik/6192/fastq_files/6192_3_pADamID_K562_wt_Ki67_AGTGGTCA_S4_R1_001.fastq.gz
+    
+  K562_ActD_DMSO_r1_Dam:
+    - /shared/gcf/t.v.schaik/6192/fastq_files/6192_4_pADamID_K562_DMSO_Dam_AACAACCA_S6_R1_001.fastq.gz
+  K562_ActD_DMSO_r1_LMNB1:
+    - /shared/gcf/t.v.schaik/6192/fastq_files/6192_5_pADamID_K562_DMSO_LMNB1_AACCGAGA_S7_R1_001.fastq.gz
+    - /shared/gcf/t.v.schaik/6227/fastq_files/6227_17_pADamID_K562_DMSO_LMNB1_ts201006_AACCGAGA_S17_R1_001.fastq.gz
+  K562_ActD_DMSO_r1_Ki67:
+    - /shared/gcf/t.v.schaik/6192/fastq_files/6192_6_pADamID_K562_DMSO_Ki67_AACGCTTA_S8_R1_001.fastq.gz
+  K562_ActD_DMSO_r1_H3K9me3:
+    - /shared/gcf/t.v.schaik/6192/fastq_files/6192_7_pADamID_K562_DMSO_H3K9me3_AAGACGGA_S9_R1_001.fastq.gz
+  K562_ActD_50ng_r1_Dam:
+    - /shared/gcf/t.v.schaik/6192/fastq_files/6192_8_pADamID_K562_ActD_Dam_AAGGTACA_S1_R1_001.fastq.gz
+  K562_ActD_50ng_r1_LMNB1:
+    - /shared/gcf/t.v.schaik/6192/fastq_files/6192_9_pADamID_K562_ActD_LMNB1_ACACAGAA_S3_R1_001.fastq.gz
+  K562_ActD_50ng_r1_Ki67:
+    - /shared/gcf/t.v.schaik/6192/fastq_files/6192_10_pADamID_K562_ActD_Ki67_ACAGCAGA_S10_R1_001.fastq.gz
+  K562_ActD_50ng_r1_H3K9me3:
+    - /shared/gcf/t.v.schaik/6192/fastq_files/6192_11_pADamID_K562_ActD_H3K9me3_ACCTCCAA_S11_R1_001.fastq.gz
+  
+  # Replicate 2 - ts201123 + ts210104
+  K562_wt_r2_Dam:
+    - /shared/gcf/t.v.schaik/6227/fastq_files/6227_1_pADamID_K562_wt_Dam_CTCAATGA_S2_R1_001.fastq.gz
+  K562_wt_r2_Ki67:
+    - /shared/gcf/t.v.schaik/6227/fastq_files/6227_2_pADamID_K562_wt_Ki67_CTGAGCCA_S5_R1_001.fastq.gz
+  
+  K562_wt_r2_H3K9me3:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_25_pADamID_K562_wt_H3K9me3_AGCAGGAA_S36_R1_001.fastq.gz
+  
+  
+  K562_ActD_DMSO_r2_Dam:
+    - /shared/gcf/t.v.schaik/6227/fastq_files/6227_3_pADamID_K562_DMSO_Dam_CTGGCATA_S4_R1_001.fastq.gz
+  K562_ActD_DMSO_r2_LMNB1:
+    - /shared/gcf/t.v.schaik/6227/fastq_files/6227_4_pADamID_K562_DMSO_LMNB1_GAATCTGA_S8_R1_001.fastq.gz
+  K562_ActD_DMSO_r2_Ki67:
+    - /shared/gcf/t.v.schaik/6227/fastq_files/6227_5_pADamID_K562_DMSO_Ki67_GACTAGTA_S9_R1_001.fastq.gz
+  K562_ActD_50ng_r2_Dam:
+    - /shared/gcf/t.v.schaik/6227/fastq_files/6227_6_pADamID_K562_ActD_Dam_GAGCTGAA_S7_R1_001.fastq.gz
+  K562_ActD_50ng_r2_LMNB1:
+    - /shared/gcf/t.v.schaik/6227/fastq_files/6227_7_pADamID_K562_ActD_LMNB1_GATAGACA_S10_R1_001.fastq.gz
+  K562_ActD_50ng_r2_Ki67:
+    - /shared/gcf/t.v.schaik/6227/fastq_files/6227_8_pADamID_K562_ActD_Ki67_GCCACATA_S11_R1_001.fastq.gz
+    
+  K562_ActD_DMSO_r2_H3K9me3:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_26_pADamID_K562_DMSO_H3K9me3_AGTCACTA_S31_R1_001.fastq.gz
+  K562_ActD_50ng_r2_H3K9me3:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_27_pADamID_K562_ActD_H3K9me3_ATCCTGTA_S37_R1_001.fastq.gz
+  
+  
+  # Replicate 3 + 4 - ts210104
+  K562_ActD_DMSO_r3_Dam:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_7_pADamID_K562_DMSO_r1_Dam_AGAGTCAA_S13_R1_001.fastq.gz
+  K562_ActD_DMSO_r3_H3K27me3:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_8_pADamID_K562_DMSO_r1_H3K27me3_AGATCGCA_S14_R1_001.fastq.gz
+  K562_ActD_50ng_r3_Dam:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_9_pADamID_K562_ActD_r1_Dam_AGCAGGAA_S15_R1_001.fastq.gz
+  K562_ActD_50ng_r3_H3K27me3:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_10_pADamID_K562_ActD_r1_H3K27me3_AGTCACTA_S12_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_13_K562_ActD_50ng_r3_H3K27me3_AGTCACTA_S22_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_13_K562_ActD_50ng_r3_H3K27me3_AGTCACTA_S6_R1_001.fastq.gz
+  
+  K562_ActD_DMSO_r4_Dam:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_17_pADamID_K562_DMSO_r2_Dam_CATACCAA_S25_R1_001.fastq.gz
+  K562_ActD_DMSO_r4_H3K27me3:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_18_pADamID_K562_DMSO_r2_H3K27me3_CCAGTTCA_S24_R1_001.fastq.gz
+  K562_ActD_50ng_r4_Dam:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_19_pADamID_K562_ActD_r2_Dam_CCGAAGTA_S23_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_15_K562_ActD_50ng_r4_Dam_CCGAAGTA_S26_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_15_K562_ActD_50ng_r4_Dam_CCGAAGTA_S10_R1_001.fastq.gz
+  K562_ActD_50ng_r4_H3K27me3:
+    - /shared/gcf/t.v.schaik/6295/fastq_files/6295_20_pADamID_K562_ActD_r2_H3K27me3_CCGTGAGA_S2_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_16_K562_ActD_50ng_r4_H3K27me3_CCGTGAGA_S32_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_16_K562_ActD_50ng_r4_H3K27me3_CCGTGAGA_S16_R1_001.fastq.gz
+  
+  
+  # Replicate 5 - ts210412
+  K562_wt_r5_Dam:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_21_pADamID_K562_wt_r1_Dam_GACTAGTA_S1_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_23_K562_wt_r5_Dam_GACTAGTA_S23_R1_001.fastq.gz
+  K562_wt_r5_Ki67:
+    - /shared/gcf/m.eder/6392/fastq_files/6392_22_pADamID_K562_wt_r1_Ki67_GAGCTGAA_S3_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_24_K562_wt_r5_Ki67_GAGCTGAA_S24_R1_001.fastq.gz
+  
+  
+  
+  #####################################
+  ### IMR90 wt ########################
+  #####################################
+
+  # Replicate 1 - ts201123
+  IMR90_wt_r1_Dam:
+    - /shared/gcf/t.v.schaik/6228/fastq_files/6228_9_pADamID_IMR90_Dam_TCTTCACA_S26_R1_001.fastq.gz
+  IMR90_wt_r1_LMNB1:
+    - /shared/gcf/t.v.schaik/6228/fastq_files/6228_10_pADamID_IMR90_LMNB1_TGAAGAGA_S27_R1_001.fastq.gz
+  IMR90_wt_r1_Ki67:
+    - /shared/gcf/t.v.schaik/6228/fastq_files/6228_11_pADamID_IMR90_Ki67_TGGAACAA_S28_R1_001.fastq.gz
+  
+  
+  
+  #####################################
+  ### RPE #############################
+  #####################################
+
+  # Replicate 1 - ts210104
+  RPE_wt_r1_Dam:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_1_pADamID_RPE_wt_Dam_AAACATCG_S12_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_9_RPE_wt_r1_Dam_AAACATCG_S30_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_9_RPE_wt_r1_Dam_AAACATCG_S14_R1_001.fastq.gz
+  RPE_wt_r1_Ki67:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_2_pADamID_RPE_wt_Ki67_ACATTGGC_S15_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_10_RPE_wt_r1_Ki67_ACATTGGC_S27_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_10_RPE_wt_r1_Ki67_ACATTGGC_S11_R1_001.fastq.gz
+  
+  RPE_0h_r1_Dam:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_3_pADamID_RPE_0h_Dam_ACCACTGT_S14_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_11_RPE_0h_r1_Dam_ACCACTGT_S17_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_11_RPE_0h_r1_Dam_ACCACTGT_S1_R1_001.fastq.gz
+  RPE_0h_r1_Ki67:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_4_pADamID_RPE_0h_Ki67_AACGTGAT_S18_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_12_RPE_0h_r1_Ki67_AACGTGAT_S19_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_12_RPE_0h_r1_Ki67_AACGTGAT_S3_R1_001.fastq.gz
+  RPE_1h_r1_Dam:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_5_pADamID_RPE_1h_Dam_CGCTGATC_S19_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_1_RPE_1h_r1_Dam_CGCTGATC_S31_R1_001.fastq.gz
+  RPE_1h_r1_Ki67:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_6_pADamID_RPE_1h_Ki67_CAGATCTG_S17_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_2_RPE_1h_r1_Ki67_CAGATCTG_S34_R1_001.fastq.gz
+  RPE_3h_r1_Dam:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_7_pADamID_RPE_3h_Dam_ATGCCTAA_S22_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_3_RPE_3h_r1_Dam_ATGCCTAA_S33_R1_001.fastq.gz
+  RPE_3h_r1_Ki67:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_8_pADamID_RPE_3h_Ki67_CTGTAGCC_S23_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_4_RPE_3h_r1_Ki67_CTGTAGCC_S37_R1_001.fastq.gz
+  RPE_6h_r1_Dam:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_9_pADamID_RPE_6h_Dam_AGTACAAG_S24_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_5_RPE_6h_r1_Dam_AGTACAAG_S38_R1_001.fastq.gz
+  RPE_6h_r1_Ki67:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_10_pADamID_RPE_6h_Ki67_CATCAAGT_S21_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_6_RPE_6h_r1_Ki67_CATCAAGT_S36_R1_001.fastq.gz
+  RPE_10h_r1_Dam:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_11_pADamID_RPE_10h_Dam_AGTGGTCA_S30_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_7_RPE_10h_r1_Dam_AGTGGTCA_S41_R1_001.fastq.gz
+  RPE_10h_r1_Ki67:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_12_pADamID_RPE_10h_Ki67_AACAACCA_S29_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_8_RPE_10h_r1_Ki67_AACAACCA_S42_R1_001.fastq.gz
+  RPE_21h_r1_Dam:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_13_pADamID_RPE_21h_Dam_AACCGAGA_S27_R1_001.fastq.gz
+  RPE_21h_r1_Ki67:
+    - /shared/gcf/t.v.schaik/6277/fastq_files/6277_14_pADamID_RPE_21h_Ki67_AACGCTTA_S28_R1_001.fastq.gz
+  
+  
+  # Replicate 2 - ts210104
+  RPE_wt_r2_Dam:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_1_pADamID_RPE_wt_Dam_GTCGTAGA_S41_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_2_RPE_wt_r2_Dam_GTCGTAGA_S5_R1_001.fastq.gz
+  RPE_wt_r2_Ki67:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_2_pADamID_RPE_wt_Ki67_GTCTGTCA_S44_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_3_RPE_wt_r2_Ki67_GTCTGTCA_S4_R1_001.fastq.gz
+  
+  RPE_0h_r2_Dam:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_3_pADamID_RPE_sync_0h_Dam_GTGTTCTA_S43_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_4_RPE_0h_r2_Dam_GTGTTCTA_S8_R1_001.fastq.gz
+  RPE_0h_r2_Ki67:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_4_pADamID_RPE_sync_0h_Ki67_TAGGATGA_S47_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_5_RPE_0h_r2_Ki67_TAGGATGA_S9_R1_001.fastq.gz
+  RPE_1h_r2_Dam:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_5_pADamID_RPE_sync_1h_Dam_TATCAGCA_S48_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_6_RPE_1h_r2_Dam_TATCAGCA_S7_R1_001.fastq.gz
+  RPE_1h_r2_Ki67:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_6_pADamID_RPE_sync_1h_Ki67_TCCGTCTA_S46_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_7_RPE_1h_r2_Ki67_TCCGTCTA_S12_R1_001.fastq.gz
+  RPE_3h_r2_Dam:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_7_pADamID_RPE_sync_3h_Dam_TCTTCACA_S51_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_8_RPE_3h_r2_Dam_TCTTCACA_S13_R1_001.fastq.gz
+  RPE_3h_r2_Ki67:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_8_pADamID_RPE_sync_3h_Ki67_TGAAGAGA_S52_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_9_RPE_3h_r2_Ki67_TGAAGAGA_S14_R1_001.fastq.gz
+  RPE_6h_r2_Dam:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_9_pADamID_RPE_sync_6h_Dam_TGGAACAA_S53_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_10_RPE_6h_r2_Dam_TGGAACAA_S11_R1_001.fastq.gz
+  RPE_6h_r2_Ki67:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_10_pADamID_RPE_sync_6h_Ki67_TGGCTTCA_S50_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6444/fastq_files/6444_11_RPE_6h_r2_Ki67_TGGCTTCA_S19_R1_001.fastq.gz
+  RPE_10h_r2_Dam:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_11_pADamID_RPE_sync_10h_Dam_ACACAGAA_S56_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_12_RPE_10h_r2_Dam_ACACAGAA_S47_R1_001.fastq.gz
+  RPE_10h_r2_Ki67:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_12_pADamID_RPE_sync_10h_Ki67_ACAGCAGA_S57_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_13_RPE_10h_r2_Ki67_ACAGCAGA_S48_R1_001.fastq.gz
+  RPE_21h_r2_Dam:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_13_pADamID_RPE_sync_21h_Dam_ACCTCCAA_S58_R1_001.fastq.gz
+  RPE_21h_r2_Ki67:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_14_pADamID_RPE_sync_21h_Ki67_ACGCTCGA_S59_R1_001.fastq.gz
+  
+  
+  # Replicate 3 - ts210414
+  RPE_wt_r3_Dam:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_1_pADamID_RPE_wt_r1_Dam_AGCAGGAA_S42_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_16_RPE_wt_r3_Dam_AGCAGGAA_S53_R1_001.fastq.gz
+  RPE_wt_r3_Ki67:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_2_pADamID_RPE_wt_r1_Ki67_AGTCACTA_S45_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_17_RPE_wt_r3_Ki67_AGTCACTA_S54_R1_001.fastq.gz
+  RPE_wt_r3_H3K27me3:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_3_pADamID_RPE_wt_r1_H3K27me3_ATCCTGTA_S44_R1_001.fastq.gz
+  RPE_wt_r3_H3K9me3:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_4_pADamID_RPE_wt_r1_H3K9me3_ATTGAGGA_S48_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_18_RPE_wt_r3_H3K9me3_ATTGAGGA_S52_R1_001.fastq.gz
+  
+  
+  RPE_ActD_DMSO_r3_Dam:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_5_pADamID_RPE_DMSO_r1_Dam_CAACCACA_S49_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_7_pADamID_RPE_DMSO_r1_Dam_TCCGTCTA_S13_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_7_pADamID_RPE_DMSO_r1_Dam_TCCGTCTA_S29_R1_001.fastq.gz
+  RPE_ActD_DMSO_r3_Ki67:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_6_pADamID_RPE_DMSO_r1_Ki67_CAAGACTA_S47_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_8_pADamID_RPE_DMSO_r1_Ki67_TCTTCACA_S12_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_8_pADamID_RPE_DMSO_r1_Ki67_TCTTCACA_S28_R1_001.fastq.gz
+  RPE_ActD_DMSO_r3_LMNB1:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_7_pADamID_RPE_DMSO_r1_LMNB1_CACTTCGA_S52_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_19_RPE_ActD_DMSO_r3_LMNB1_CACTTCGA_S51_R1_001.fastq.gz
+  RPE_ActD_DMSO_r3_H3K27me3:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_8_pADamID_RPE_DMSO_r1_H3K27me3_CAGCGTTA_S53_R1_001.fastq.gz
+  RPE_ActD_DMSO_r3_H3K9me3:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_9_pADamID_RPE_DMSO_r1_H3K9me3_CATACCAA_S54_R1_001.fastq.gz
+  RPE_ActD_50ng_r3_Dam:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_10_pADamID_RPE_ActD_r1_Dam_CCAGTTCA_S51_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_20_RPE_ActD_50ng_r3_Dam_CCAGTTCA_S30_R1_001.fastq.gz
+  RPE_ActD_50ng_r3_Ki67:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_11_pADamID_RPE_ActD_r1_Ki67_CCGAAGTA_S57_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_21_RPE_ActD_50ng_r3_Ki67_CCGAAGTA_S32_R1_001.fastq.gz
+  RPE_ActD_50ng_r3_LMNB1:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_12_pADamID_RPE_ActD_r1_LMNB1_CCGTGAGA_S58_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_22_RPE_ActD_50ng_r3_LMNB1_CCGTGAGA_S58_R1_001.fastq.gz
+  RPE_ActD_50ng_r3_H3K27me3:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_13_pADamID_RPE_ActD_r1_H3K27me3_CCTCCTGA_S59_R1_001.fastq.gz
+  RPE_ActD_50ng_r3_H3K9me3:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_14_pADamID_RPE_ActD_r1_H3K9me3_CGAACTTA_S60_R1_001.fastq.gz
+  
+  RPE_Osm_0m_r3_Dam:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_15_pADamID_RPE_osm_0m_r1_Dam_CGACTGGA_S56_R1_001.fastq.gz
+  RPE_Osm_0m_r3_Ki67:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_16_pADamID_RPE_osm_0m_r1_Ki67_CGCATACA_S66_R1_001.fastq.gz
+  RPE_Osm_30m_r3_Dam:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_17_pADamID_RPE_osm_30m_r1_Dam_CTCAATGA_S65_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_23_RPE_Osm_30m_r3_Dam_CTCAATGA_S35_R1_001.fastq.gz
+  RPE_Osm_30m_r3_Ki67:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_18_pADamID_RPE_osm_30m_r1_Ki67_CTGAGCCA_S63_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_24_RPE_Osm_30m_r3_Ki67_CTGAGCCA_S57_R1_001.fastq.gz
+  RPE_Osm_180m_r3_Dam:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_19_pADamID_RPE_osm_180m_r1_Dam_CTGGCATA_S64_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_25_RPE_Osm_180m_r3_Dam_CTGGCATA_S39_R1_001.fastq.gz
+  RPE_Osm_180m_r3_Ki67:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_20_pADamID_RPE_osm_180m_r1_Ki67_GAATCTGA_S62_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_26_RPE_Osm_180m_r3_Ki67_GAATCTGA_S56_R1_001.fastq.gz
+  
+  
+  # Replicate 4 - ts210414
+  RPE_wt_r4_Dam:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_21_pADamID_RPE_wt_r2_Dam_GACTAGTA_S41_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_27_RPE_wt_r4_Dam_GACTAGTA_S44_R1_001.fastq.gz
+  RPE_wt_r4_Ki67:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_22_pADamID_RPE_wt_r2_Ki67_GAGCTGAA_S43_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_28_RPE_wt_r4_Ki67_GAGCTGAA_S59_R1_001.fastq.gz
+  RPE_wt_r4_H3K27me3:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_23_pADamID_RPE_wt_r2_H3K27me3_GATAGACA_S46_R1_001.fastq.gz
+  RPE_wt_r4_H3K9me3:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_24_pADamID_RPE_wt_r2_H3K9me3_GCCACATA_S70_R1_001.fastq.gz
+  
+  
+  RPE_ActD_DMSO_r4_Dam:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_25_pADamID_RPE_DMSO_r2_Dam_GCGAGTAA_S50_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_29_RPE_ActD_DMSO_r4_Dam_GCGAGTAA_S60_R1_001.fastq.gz
+  RPE_ActD_DMSO_r4_Ki67:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_26_pADamID_RPE_DMSO_r2_Ki67_GCTAACGA_S69_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_30_RPE_ActD_DMSO_r4_Ki67_GCTAACGA_S50_R1_001.fastq.gz
+  RPE_ActD_DMSO_r4_LMNB1:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_27_pADamID_RPE_DMSO_r2_LMNB1_GCTCGGTA_S68_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_31_RPE_ActD_DMSO_r4_LMNB1_GCTCGGTA_S61_R1_001.fastq.gz
+  RPE_ActD_DMSO_r4_H3K27me3:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_28_pADamID_RPE_DMSO_r2_H3K27me3_GGAGAACA_S55_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_32_RPE_ActD_DMSO_r4_H3K27me3_GGAGAACA_S62_R1_001.fastq.gz
+  RPE_ActD_DMSO_r4_H3K9me3:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_29_pADamID_RPE_DMSO_r2_H3K9me3_GGTGCGAA_S71_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_33_RPE_ActD_DMSO_r4_H3K9me3_GGTGCGAA_S55_R1_001.fastq.gz
+  RPE_ActD_50ng_r4_Dam:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_30_pADamID_RPE_ActD_r2_Dam_GTACGCAA_S72_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_34_RPE_ActD_50ng_r4_Dam_GTACGCAA_S63_R1_001.fastq.gz
+  RPE_ActD_50ng_r4_Ki67:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_31_pADamID_RPE_ActD_r2_Ki67_GTCGTAGA_S61_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_35_RPE_ActD_50ng_r4_Ki67_GTCGTAGA_S64_R1_001.fastq.gz
+  RPE_ActD_50ng_r4_LMNB1:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_32_pADamID_RPE_ActD_r2_LMNB1_GTCTGTCA_S73_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_36_RPE_ActD_50ng_r4_LMNB1_GTCTGTCA_S65_R1_001.fastq.gz
+  RPE_ActD_50ng_r4_H3K27me3:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_33_pADamID_RPE_ActD_r2_H3K27me3_GTGTTCTA_S74_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_20_RPE_ActD_50ng_r4_H3K27me3_GTGTTCTA_S36_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6443/fastq_files/6443_20_RPE_ActD_50ng_r4_H3K27me3_GTGTTCTA_S20_R1_001.fastq.gz
+  RPE_ActD_50ng_r4_H3K9me3:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_34_pADamID_RPE_ActD_r2_H3K9me3_TAGGATGA_S67_R1_001.fastq.gz
+  
+  RPE_Osm_0m_r4_Dam:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_35_pADamID_RPE_osm_0m_r2_Dam_TATCAGCA_S75_R1_001.fastq.gz
+  RPE_Osm_0m_r4_Ki67:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_36_pADamID_RPE_osm_0m_r2_Ki67_TCCGTCTA_S76_R1_001.fastq.gz
+  RPE_Osm_30m_r4_Dam:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_37_pADamID_RPE_osm_30m_r2_Dam_TCTTCACA_S77_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_37_RPE_Osm_30m_r4_Dam_TCTTCACA_S66_R1_001.fastq.gz
+  RPE_Osm_30m_r4_Ki67:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_38_pADamID_RPE_osm_30m_r2_Ki67_TGAAGAGA_S78_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_38_RPE_Osm_30m_r4_Ki67_TGAAGAGA_S67_R1_001.fastq.gz
+  RPE_Osm_180m_r4_Dam:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_39_pADamID_RPE_osm_180m_r2_Dam_TGGAACAA_S79_R1_001.fastq.gz
+  RPE_Osm_180m_r4_Ki67:
+    - /shared/gcf/m.eder/6393/fastq_files/6393_40_pADamID_RPE_osm_180m_r2_Ki67_TGGCTTCA_S80_R1_001.fastq.gz
+    - /shared/gcf/m.eder/6445/fastq_files/6445_39_RPE_Osm_180m_r4_Ki67_TGGCTTCA_S68_R1_001.fastq.gz
+  
+  
+  # Replicate 5&6 - ts210430
+  RPE_H3K27me3inh_DMSO_r5_Dam:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_1_pADamID_RPE_DMSO_r1_Dam_AAACATCG_S2_R1_001.fastq.gz
+  RPE_H3K27me3inh_DMSO_r5_Ki67:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_2_pADamID_RPE_DMSO_r1_Ki67_ACATTGGC_S5_R1_001.fastq.gz
+  RPE_H3K27me3inh_GSK126_r5_Dam:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_3_pADamID_RPE_GSK126_r1_Dam_ACCACTGT_S4_R1_001.fastq.gz
+  RPE_H3K27me3inh_GSK126_r5_Ki67:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_4_pADamID_RPE_GSK126_r1_Ki67_AACGTGAT_S8_R1_001.fastq.gz
+  RPE_H3K27me3inh_EED226_r5_Dam:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_5_pADamID_RPE_EED226_r1_Dam_CGCTGATC_S9_R1_001.fastq.gz
+  RPE_H3K27me3inh_EED226_r5_Ki67:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_6_pADamID_RPE_EED226_r1_Ki67_CAGATCTG_S7_R1_001.fastq.gz
+  
+  RPE_H3K27me3inh_mit_DMSO_r5_Dam:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_7_pADamID_RPE_DMSO_mit_r1_Dam_ATGCCTAA_S14_R1_001.fastq.gz
+  RPE_H3K27me3inh_mit_DMSO_r5_Ki67:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_8_pADamID_RPE_DMSO_mit_r1_Ki67_CTGTAGCC_S13_R1_001.fastq.gz
+  RPE_H3K27me3inh_mit_GSK126_r5_Dam:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_9_pADamID_RPE_GSK126_mit_r1_Dam_AGTACAAG_S12_R1_001.fastq.gz
+  RPE_H3K27me3inh_mit_GSK126_r5_Ki67:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_10_pADamID_RPE_GSK126_mit_r1_Ki67_CATCAAGT_S11_R1_001.fastq.gz
+  RPE_H3K27me3inh_mit_EED226_r5_Dam:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_11_pADamID_RPE_EED226_mit_r1_Dam_AGTGGTCA_S15_R1_001.fastq.gz
+  RPE_H3K27me3inh_mit_EED226_r5_Ki67:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_12_pADamID_RPE_EED226_mit_r1_Ki67_AACAACCA_S1_R1_001.fastq.gz
+    
+  RPE_noco_timeseries_30_r5_Dam:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_13_pADamID_RPE_wt_mit30_r1_Dam_AACCGAGA_S3_R1_001.fastq.gz
+  RPE_noco_timeseries_30_r5_Ki67:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_14_pADamID_RPE_wt_mit30_r1_Ki67_AACGCTTA_S16_R1_001.fastq.gz
+  RPE_noco_timeseries_60_r5_Dam:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_15_pADamID_RPE_wt_mit60_r1_Dam_AAGACGGA_S6_R1_001.fastq.gz
+  RPE_noco_timeseries_60_r5_Ki67:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_16_pADamID_RPE_wt_mit60_r1_Ki67_AAGGTACA_S17_R1_001.fastq.gz
+  RPE_noco_timeseries_90_r5_Dam:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_17_pADamID_RPE_wt_mit90_r1_Dam_ACACAGAA_S10_R1_001.fastq.gz
+  RPE_noco_timeseries_90_r5_Ki67:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_18_pADamID_RPE_wt_mit90_r1_Ki67_ACAGCAGA_S18_R1_001.fastq.gz
+  RPE_noco_timeseries_180_r5_Dam:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_19_pADamID_RPE_wt_mit180_r1_Dam_ACCTCCAA_S19_R1_001.fastq.gz
+  RPE_noco_timeseries_180_r5_Ki67:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_20_pADamID_RPE_wt_mit180_r1_Ki67_ACGCTCGA_S20_R1_001.fastq.gz
+  
+  RPE_H3K27me3inh_DMSO_r6_Dam:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_1_pADamID_RPE_DMSO_r2_Dam_AGATCGCA_S25_R1_001.fastq.gz
+  RPE_H3K27me3inh_DMSO_r6_Ki67:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_2_pADamID_RPE_DMSO_r2_Ki67_AGCAGGAA_S28_R1_001.fastq.gz
+  RPE_H3K27me3inh_GSK126_r6_Dam:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_3_pADamID_RPE_GSK126_r2_Dam_AGTCACTA_S27_R1_001.fastq.gz
+  RPE_H3K27me3inh_GSK126_r6_Ki67:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_4_pADamID_RPE_GSK126_r2_Ki67_ATCCTGTA_S31_R1_001.fastq.gz
+  RPE_H3K27me3inh_EED226_r6_Dam:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_5_pADamID_RPE_EED226_r2_Dam_ATTGAGGA_S32_R1_001.fastq.gz
+  RPE_H3K27me3inh_EED226_r6_Ki67:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_6_pADamID_RPE_EED226_r2_Ki67_CAACCACA_S30_R1_001.fastq.gz
+  
+  RPE_H3K27me3inh_mit_DMSO_r6_Dam:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_7_pADamID_RPE_DMSO_mit_r2_Dam_CAAGACTA_S37_R1_001.fastq.gz
+  RPE_H3K27me3inh_mit_DMSO_r6_Ki67:
+    # - /shared/gcf/l.dauban/6418/fastq_files/6418_8_pADamID_RPE_DMSO_mit_r2_Ki67_CAATGGAA_S36_R1_001.fastq.gz
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_8_pADamID_RPE_DMSO_mit_r2_Ki67_CACTTCGA_S36_R1_001.fastq.gz
+  RPE_H3K27me3inh_mit_GSK126_r6_Dam:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_9_pADamID_RPE_GSK126_mit_r2_Dam_CAGCGTTA_S35_R1_001.fastq.gz
+  RPE_H3K27me3inh_mit_GSK126_r6_Ki67:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_10_pADamID_RPE_GSK126_mit_r2_Ki67_CATACCAA_S34_R1_001.fastq.gz
+  RPE_H3K27me3inh_mit_EED226_r6_Dam:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_11_pADamID_RPE_EED226_mit_r2_Dam_CCAGTTCA_S38_R1_001.fastq.gz
+  RPE_H3K27me3inh_mit_EED226_r6_Ki67:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_12_pADamID_RPE_EED226_mit_r2_Ki67_CCGAAGTA_S24_R1_001.fastq.gz
+    
+  RPE_noco_timeseries_30_r6_Dam:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_13_pADamID_RPE_wt_mit30_r2_Dam_CCGTGAGA_S26_R1_001.fastq.gz
+  RPE_noco_timeseries_30_r6_Ki67:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_14_pADamID_RPE_wt_mit30_r2_Ki67_CCTCCTGA_S39_R1_001.fastq.gz
+  RPE_noco_timeseries_60_r6_Dam:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_15_pADamID_RPE_wt_mit60_r2_Dam_CGAACTTA_S29_R1_001.fastq.gz
+  RPE_noco_timeseries_60_r6_Ki67:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_16_pADamID_RPE_wt_mit60_r2_Ki67_CGACTGGA_S40_R1_001.fastq.gz
+  RPE_noco_timeseries_90_r6_Dam:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_17_pADamID_RPE_wt_mit90_r2_Dam_CGCATACA_S33_R1_001.fastq.gz
+  RPE_noco_timeseries_90_r6_Ki67:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_18_pADamID_RPE_wt_mit90_r2_Ki67_CTCAATGA_S41_R1_001.fastq.gz
+  RPE_noco_timeseries_180_r6_Dam:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_19_pADamID_RPE_wt_mit180_r2_Dam_CTGAGCCA_S42_R1_001.fastq.gz
+  RPE_noco_timeseries_180_r6_Ki67:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_20_pADamID_RPE_wt_mit180_r2_Ki67_CTGGCATA_S43_R1_001.fastq.gz
+  
+  
+  #####################################
+  ### HFF wt ##########################
+  #####################################
+
+  # Replicate 1 - ts210104
+  HFF_wt_r1_Dam:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_27_pADamID_HFF_wt_r1_Dam_CATACCAA_S67_R1_001.fastq.gz
+  HFF_wt_r1_LMNB1:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_28_pADamID_HFF_wt_r1_LMNB1_CCAGTTCA_S54_R1_001.fastq.gz
+  HFF_wt_r1_Ki67:
+    - /shared/gcf/t.v.schaik/6296/fastq_files/6296_29_pADamID_HFF_wt_r1_Ki67_CCGAAGTA_S72_R1_001.fastq.gz
+  
+  # Replicate 2&3 - ts210130
+  HFF_wt_r2_Dam:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_21_pADamID_HFF_wt_r1_Dam_ACGTATCA_S21_R1_001.fastq.gz
+  HFF_wt_r2_LMNB1:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_22_pADamID_HFF_wt_r1_LMNB1_ACTATGCA_S22_R1_001.fastq.gz
+  HFF_wt_r2_Ki67:
+    - /shared/gcf/l.dauban/6417/fastq_files/6417_23_pADamID_HFF_wt_r1_Ki67_AGAGTCAA_S23_R1_001.fastq.gz
+  
+  HFF_wt_r3_Dam:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_21_pADamID_HFF_wt_r2_Dam_GAATCTGA_S44_R1_001.fastq.gz
+  HFF_wt_r3_LMNB1:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_22_pADamID_HFF_wt_r2_LMNB1_GACTAGTA_S45_R1_001.fastq.gz
+  HFF_wt_r3_Ki67:
+    - /shared/gcf/l.dauban/6418/fastq_files/6418_23_pADamID_HFF_wt_r2_Ki67_GAGCTGAA_S46_R1_001.fastq.gz
+  
+  
+  
+  #####################################
+  ### HCT116 Epigenetic inhibitors ####
+  #####################################
+
+  # Replicate 1
+  HCT116_EpiInh_DMSO_r1_Dam1:
+    - /shared/gcf/t.v.schaik/6147/fastq_files/6147_1_DamID_HCT116_DMSO_Dam1_CTCAATGA_S45_R1_001.fastq.gz
+  HCT116_EpiInh_DMSO_r1_Dam2:
+    - /shared/gcf/t.v.schaik/6147/fastq_files/6147_2_DamID_HCT116_DMSO_Dam2_CTGAGCCA_S48_R1_001.fastq.gz
+  HCT116_EpiInh_DMSO_r1_LMNB1:
+    - /shared/gcf/t.v.schaik/6147/fastq_files/6147_3_DamID_HCT116_DMSO_LMNB1_CTGGCATA_S47_R1_001.fastq.gz
+  HCT116_EpiInh_DMSO_r1_4xAP3:
+    - /shared/gcf/t.v.schaik/6147/fastq_files/6147_4_DamID_HCT116_DMSO_4xAP3_GAATCTGA_S51_R1_001.fastq.gz
+  
+  HCT116_EpiInh_G9A_r1_Dam1:
+    - /shared/gcf/t.v.schaik/6147/fastq_files/6147_5_DamID_HCT116_G9A_Dam1_GACTAGTA_S52_R1_001.fastq.gz
+  HCT116_EpiInh_G9A_r1_Dam2:
+    - /shared/gcf/t.v.schaik/6147/fastq_files/6147_6_DamID_HCT116_G9A_Dam2_GAGCTGAA_S50_R1_001.fastq.gz
+  HCT116_EpiInh_G9A_r1_LMNB1:
+    - /shared/gcf/t.v.schaik/6147/fastq_files/6147_7_DamID_HCT116_G9A_LMNB1_GATAGACA_S56_R1_001.fastq.gz
+  HCT116_EpiInh_G9A_r1_4xAP3:
+    - /shared/gcf/t.v.schaik/6147/fastq_files/6147_8_DamID_HCT116_G9A_4xAP3_GCCACATA_S55_R1_001.fastq.gz
+  
+  HCT116_EpiInh_PRC2_r1_Dam1:
+    - /shared/gcf/t.v.schaik/6147/fastq_files/6147_9_DamID_HCT116_PRC2_Dam1_GCGAGTAA_S57_R1_001.fastq.gz
+  HCT116_EpiInh_PRC2_r1_Dam2:
+    - /shared/gcf/t.v.schaik/6147/fastq_files/6147_10_DamID_HCT116_PRC2_Dam2_GCTAACGA_S54_R1_001.fastq.gz
+  HCT116_EpiInh_PRC2_r1_LMNB1:
+    - /shared/gcf/t.v.schaik/6147/fastq_files/6147_11_DamID_HCT116_PRC2_LMNB1_GCTCGGTA_S44_R1_001.fastq.gz
+  HCT116_EpiInh_PRC2_r1_4xAP3:
+    - /shared/gcf/t.v.schaik/6147/fastq_files/6147_12_DamID_HCT116_PRC2_4xAP3_GGAGAACA_S46_R1_001.fastq.gz
+  
+  HCT116_EpiInh_DKO_r1_Dam1:
+    - /shared/gcf/t.v.schaik/6147/fastq_files/6147_13_DamID_HCT116_DKO_Dam1_GGTGCGAA_S49_R1_001.fastq.gz
+  HCT116_EpiInh_DKO_r1_Dam2:
+    - /shared/gcf/t.v.schaik/6147/fastq_files/6147_14_DamID_HCT116_DKO_Dam2_GTACGCAA_S58_R1_001.fastq.gz
+  HCT116_EpiInh_DKO_r1_LMNB1:
+    - /shared/gcf/t.v.schaik/6147/fastq_files/6147_15_DamID_HCT116_DKO_LMNB1_GTCGTAGA_S53_R1_001.fastq.gz
+  HCT116_EpiInh_DKO_r1_4xAP3:
+    - /shared/gcf/t.v.schaik/6147/fastq_files/6147_16_DamID_HCT116_DKO_4xAP3_GTCTGTCA_S59_R1_001.fastq.gz
+  
+  
+  #####################################
+  ### Old samples #####################
+  #####################################
+  
+  # These samples have been generated before, for the pA-DamID manuscript. I 
+  # call them "replicate x". It's convenient to have everything here
+  
+  # HCT116
+  HCT116_wt_rx1_Dam:
+    - /shared/gcf/t.v.schaik/5190/fastq_files/5190_7_pADamID_HCT116_Dam_AGTGGTCA_S25_R1_001.fastq.gz
+  HCT116_wt_rx1_LMNB1:
+    - /shared/gcf/t.v.schaik/5190/fastq_files/5190_9_pADamID_HCT116_LMNB1_AACCGAGA_S33_R1_001.fastq.gz
+  
+  HCT116_wt_rx2_Dam:
+    - /shared/gcf/t.v.schaik/5264/fastq_files/5264_1_pADamID-replicate_Hap1-Dam_AAACATCG_S5_R1_001.fastq.gz
+    - /shared/gcf/t.v.schaik/5576/fastq_files/5576_4_pADamID-Hap1_r2_Dam_AAACATCG_S8_R1_001.fastq.gz
+    #- /shared/gcf/t.v.schaik/5576/fastq_files/5576_7_pADamID-HCT116_r2_Dam_AGTACAAG_S12_R1_001.fastq.gz
+  HCT116_wt_rx2_LMNB1:
+    - /shared/gcf/t.v.schaik/5264/fastq_files/5264_3_pADamID-replicate_Hap1-pADam_ACCACTGT_S7_R1_001.fastq.gz
+    - /shared/gcf/t.v.schaik/5576/fastq_files/5576_5_pADamID-Hap1_r2_LMNB1_ACCACTGT_S9_R1_001.fastq.gz
+    #- /shared/gcf/t.v.schaik/5576/fastq_files/5576_8_pADamID-HCT116_r2_LMNB1_AGTGGTCA_S13_R1_001.fastq.gz
+  
+  # K562
+  K562_wt_rx1_Dam:
+    - /shared/gcf/t.v.schaik/5105/fastq_files/5105_1_pADamID-K562_neg_Dam_ACAAGCTA_S22_R1_001.fastq.gz
+  K562_wt_rx1_LMNB1:
+    - /shared/gcf/t.v.schaik/5105/fastq_files/5105_3_pADamID-K562_LMNB1_ACATTGGC_S24_R1_001.fastq.gz
+  K562_wt_rx1_H3K27me3:
+    - /shared/gcf/t.v.schaik/5105/fastq_files/5105_11_pADamID-K562_H3K27me3_CATCAAGT_S31_R1_001.fastq.gz
+    
+  K562_wt_rx2_Dam:
+    - /shared/gcf/t.v.schaik/5190/fastq_files/5190_1_pADamID_K562_Dam_CGCTGATC_S26_R1_001.fastq.gz
+  K562_wt_rx2_LMNB1:
+    - /shared/gcf/t.v.schaik/5190/fastq_files/5190_3_pADamID_K562_LMNB1_ATGCCTAA_S28_R1_001.fastq.gz
+    
+  K562_wt_rx3_Dam:
+    - /shared/gcf/t.v.schaik/5188/fastq_files/5188_10_pADamID_K562_Dam_CATACCAA_S10_R1_001.fastq.gz
+  K562_wt_rx3_H3K27me3:
+    - /shared/gcf/t.v.schaik/5188/fastq_files/5188_11_pADamID_K562_H3K27me3_CCAGTTCA_S11_R1_001.fastq.gz
+  K562_wt_rx3_H3K9me3:
+    - /shared/gcf/t.v.schaik/5188/fastq_files/5188_12_pADamID_K562_H3K9me3_CCGAAGTA_S12_R1_001.fastq.gz
+  
+  # RPE 
+  RPE_wt_rx1_Dam:
+    - /shared/gcf/t.v.schaik/5959/fastq_files/5959_7_pADamID_RPE_r2_Dam_AGTACAAG_S86_R1_001.fastq.gz
+  RPE_wt_rx1_LMNB1:
+    - /shared/gcf/t.v.schaik/5959/fastq_files/5959_8_pADamID_RPE_r2_LMNB1_CATCAAGT_S87_R1_001.fastq.gz
+  
+  RPE_wt_rx2_Dam:
+    - /shared/gcf/t.v.schaik/5960/fastq_files/5960_17_pADamID_RPE_r3_Dam_CCGAAGTA_S109_R1_001.fastq.gz
+  RPE_wt_rx2_LMNB1:
+    - /shared/gcf/t.v.schaik/5960/fastq_files/5960_18_pADamID_RPE_r3_LMNB1_CCGTGAGA_S110_R1_001.fastq.gz
+
+  
+  
+
+# Bam control list, using basenames only
+dam_controls:
+
+  # HCT116 - wt
+  HCT116_wt_r2_LMNB1: HCT116_wt_r2_Dam
+  HCT116_wt_r2_Ki67: HCT116_wt_r2_Dam
+  
+  HCT116_wt_r3_Ki67: HCT116_wt_r3_Dam
+  
+  HCT116_wt_r4_H3K27me3: HCT116_wt_r4_Dam
+  HCT116_wt_r5_H3K27me3: HCT116_wt_r5_Dam
+  
+  HCT116_wt_r6_Ki67: HCT116_wt_r6_Dam
+  
+  HCT116_wt_r7_Ki67HPA: HCT116_wt_r7_Dam
+  HCT116_wt_r7_Ki67NOV: HCT116_wt_r7_Dam
+  HCT116_wt_r8_Ki67HPA: HCT116_wt_r8_Dam
+  HCT116_wt_r8_Ki67NOV: HCT116_wt_r8_Dam
+  
+  HCT116_wt_rx1_LMNB1: HCT116_wt_rx1_Dam
+  HCT116_wt_rx2_LMNB1: HCT116_wt_rx2_Dam
+  
+  # HCT116 - ActD
+  HCT116_ActD_DMSO_r1_pADam: HCT116_ActD_DMSO_r1_Dam
+  HCT116_ActD_DMSO_r1_LMNB1: HCT116_ActD_DMSO_r1_Dam
+  HCT116_ActD_DMSO_r1_MKI67IP: HCT116_ActD_DMSO_r1_Dam
+  HCT116_ActD_DMSO_r1_NCL: HCT116_ActD_DMSO_r1_Dam
+  HCT116_ActD_DMSO_r1_Ki67: HCT116_ActD_DMSO_r1_Dam
+  HCT116_ActD_50ng_r1_pADam: HCT116_ActD_50ng_r1_Dam
+  HCT116_ActD_50ng_r1_LMNB1: HCT116_ActD_50ng_r1_Dam
+  HCT116_ActD_50ng_r1_MKI67IP: HCT116_ActD_50ng_r1_Dam
+  HCT116_ActD_50ng_r1_NCL: HCT116_ActD_50ng_r1_Dam
+  HCT116_ActD_50ng_r1_Ki67: HCT116_ActD_50ng_r1_Dam
+  
+  HCT116_ActD_DMSO_r2_LMNB1: HCT116_ActD_DMSO_r2_Dam
+  HCT116_ActD_DMSO_r2_Ki67: HCT116_ActD_DMSO_r2_Dam
+  HCT116_ActD_DMSO_r2_H3K9me3: HCT116_ActD_DMSO_r2_Dam
+  HCT116_ActD_50ng_r2_LMNB1: HCT116_ActD_50ng_r2_Dam
+  HCT116_ActD_50ng_r2_Ki67: HCT116_ActD_50ng_r2_Dam
+  HCT116_ActD_50ng_r2_H3K9me3: HCT116_ActD_50ng_r2_Dam
+  
+  HCT116_ActD_DMSO_r3_H3K9me3: HCT116_ActD_DMSO_r3_Dam
+  HCT116_ActD_50ng_r3_H3K9me3: HCT116_ActD_50ng_r3_Dam
+  
+  HCT116_ActD_DMSO_r4_H3K27me3: HCT116_ActD_DMSO_r4_Dam
+  HCT116_ActD_50ng_r4_H3K27me3: HCT116_ActD_50ng_r4_Dam
+  HCT116_ActD_DMSO_r5_H3K27me3: HCT116_ActD_DMSO_r5_Dam
+  HCT116_ActD_50ng_r5_H3K27me3: HCT116_ActD_50ng_r5_Dam
+  
+  
+  # HCT116 - Ki67 KD
+  HCT116_SC_r1_LMNB1: HCT116_SC_r1_Dam
+  HCT116_SC_r1_H3K27me3: HCT116_SC_r1_Dam
+  HCT116_SC_r1_H3K9me3: HCT116_SC_r1_Dam
+  HCT116_Ki67KD_r1_LMNB1: HCT116_Ki67KD_r1_Dam
+  HCT116_Ki67KD_r1_H3K27me3: HCT116_Ki67KD_r1_Dam
+  HCT116_Ki67KD_r1_H3K9me3: HCT116_Ki67KD_r1_Dam
+  
+  HCT116_SC_r1_LMNB1_wtDam: HCT116_wt_r3_Dam
+  HCT116_SC_r1_H3K27me3_wtDam: HCT116_wt_r3_Dam
+  HCT116_SC_r1_H3K9me3_wtDam: HCT116_wt_r3_Dam
+  HCT116_Ki67KD_r1_LMNB1_wtDam: HCT116_wt_r3_Dam
+  HCT116_Ki67KD_r1_H3K27me3_wtDam: HCT116_wt_r3_Dam
+  HCT116_Ki67KD_r1_H3K9me3_wtDam: HCT116_wt_r3_Dam
+  
+  
+  # HCT116 - Ki67 AID
+  HCT116_AID_ctrl_r1_LMNB1: HCT116_AID_ctrl_r1_Dam
+  HCT116_AID_ctrl_IAA_r1_LMNB1: HCT116_AID_ctrl_IAA_r1_Dam
+  HCT116_AID_thy_r1_LMNB1: HCT116_AID_thy_r1_Dam
+  HCT116_AID_thy_IAA_r1_LMNB1: HCT116_AID_thy_IAA_r1_Dam
+  HCT116_AID_RO_IAA_r1_LMNB1: HCT116_AID_RO_IAA_r1_Dam
+  
+  HCT116_AID_ctrl_r2_LMNB1: HCT116_AID_ctrl_r2_Dam
+  HCT116_AID_ctrl_r2_Ki67: HCT116_AID_ctrl_r2_Dam
+  HCT116_AID_ctrl_r2_H3K27me3: HCT116_AID_ctrl_r2_Dam
+  HCT116_AID_ctrl_r2_H3K9me3: HCT116_AID_ctrl_r2_Dam
+  
+  HCT116_AID_ctrl_IAA_r2_LMNB1: HCT116_AID_ctrl_IAA_r2_Dam
+  HCT116_AID_ctrl_IAA_r2_Ki67: HCT116_AID_ctrl_IAA_r2_Dam
+  HCT116_AID_ctrl_IAA_r2_H3K27me3: HCT116_AID_ctrl_IAA_r2_Dam
+  HCT116_AID_ctrl_IAA_r2_H3K9me3: HCT116_AID_ctrl_IAA_r2_Dam
+  
+  HCT116_AID_thy_r2_LMNB1: HCT116_AID_thy_r2_Dam
+  HCT116_AID_thy_IAA_r2_LMNB1: HCT116_AID_thy_IAA_r2_Dam
+  HCT116_AID_RO_IAA_r2_LMNB1: HCT116_AID_RO_IAA_r2_Dam
+  HCT116_AID_RO_r2_LMNB1: HCT116_AID_RO_r2_Dam
+  
+  HCT116_AID_ctrl_r3_LMNB1: HCT116_AID_ctrl_r3_Dam
+  HCT116_AID_ctrl_r3_Ki67: HCT116_AID_ctrl_r3_Dam
+  HCT116_AID_ctrl_r3_H3K27me3: HCT116_AID_ctrl_r3_Dam
+  HCT116_AID_ctrl_r3_H3K9me3: HCT116_AID_ctrl_r3_Dam
+  
+  HCT116_AID_ctrl_IAA_r3_LMNB1: HCT116_AID_ctrl_IAA_r3_Dam
+  HCT116_AID_ctrl_IAA_r3_Ki67: HCT116_AID_ctrl_IAA_r3_Dam
+  HCT116_AID_ctrl_IAA_r3_H3K27me3: HCT116_AID_ctrl_IAA_r3_Dam
+  HCT116_AID_ctrl_IAA_r3_H3K9me3: HCT116_AID_ctrl_IAA_r3_Dam
+  
+  HCT116_AID_RO_r3_LMNB1: HCT116_AID_RO_r3_Dam
+  
+  # Replicate 4/5
+  HCT116_AID_doublethy_r4_Ki67: HCT116_AID_doublethy_r4_Dam
+  HCT116_AID_doublethy_r4_LMNB1: HCT116_AID_doublethy_r4_Dam
+  HCT116_AID_doublethy_r4_H3K27me3: HCT116_AID_doublethy_r4_Dam
+  HCT116_AID_doublethy_r4_H3K9me3: HCT116_AID_doublethy_r4_Dam
+  HCT116_AID_doublethy_IAA_r4_Ki67: HCT116_AID_doublethy_IAA_r4_Dam
+  HCT116_AID_doublethy_IAA_r4_LMNB1: HCT116_AID_doublethy_IAA_r4_Dam
+  HCT116_AID_doublethy_IAA_r4_H3K27me3: HCT116_AID_doublethy_IAA_r4_Dam
+  HCT116_AID_doublethy_IAA_r4_H3K9me3: HCT116_AID_doublethy_IAA_r4_Dam
+  HCT116_AID_RO_r4_Ki67: HCT116_AID_RO_r4_Dam
+  HCT116_AID_RO_r4_H3K27me3: HCT116_AID_RO_r4_Dam
+  HCT116_AID_RO_r4_H3K9me3: HCT116_AID_RO_r4_Dam
+  HCT116_AID_RO_IAA_r4_Ki67: HCT116_AID_RO_IAA_r4_Dam
+  HCT116_AID_RO_IAA_r4_H3K27me3: HCT116_AID_RO_IAA_r4_Dam
+  HCT116_AID_RO_IAA_r4_H3K9me3: HCT116_AID_RO_IAA_r4_Dam
+  
+  HCT116_AID_doublethy_r5_Ki67: HCT116_AID_doublethy_r5_Dam
+  HCT116_AID_doublethy_r5_LMNB1: HCT116_AID_doublethy_r5_Dam
+  HCT116_AID_doublethy_r5_H3K27me3: HCT116_AID_doublethy_r5_Dam
+  HCT116_AID_doublethy_r5_H3K9me3: HCT116_AID_doublethy_r5_Dam
+  HCT116_AID_doublethy_IAA_r5_Ki67: HCT116_AID_doublethy_IAA_r5_Dam
+  HCT116_AID_doublethy_IAA_r5_LMNB1: HCT116_AID_doublethy_IAA_r5_Dam
+  HCT116_AID_doublethy_IAA_r5_H3K27me3: HCT116_AID_doublethy_IAA_r5_Dam
+  HCT116_AID_doublethy_IAA_r5_H3K9me3: HCT116_AID_doublethy_IAA_r5_Dam
+  HCT116_AID_RO_r5_Ki67: HCT116_AID_RO_r5_Dam
+  HCT116_AID_RO_r5_H3K27me3: HCT116_AID_RO_r5_Dam
+  HCT116_AID_RO_r5_H3K9me3: HCT116_AID_RO_r5_Dam
+  HCT116_AID_RO_IAA_r5_Ki67: HCT116_AID_RO_IAA_r5_Dam
+  HCT116_AID_RO_IAA_r5_H3K27me3: HCT116_AID_RO_IAA_r5_Dam
+  HCT116_AID_RO_IAA_r5_H3K9me3: HCT116_AID_RO_IAA_r5_Dam
+  
+  
+  
+  # K562 - ActD and wt
+  K562_wt_r1_LMNB1: K562_wt_r1_Dam
+  K562_wt_r1_Ki67: K562_wt_r1_Dam
+  
+  K562_wt_r2_Ki67: K562_wt_r2_Dam
+  K562_wt_r2_H3K9me3: K562_wt_r2_Dam
+  
+  K562_ActD_DMSO_r1_LMNB1: K562_ActD_DMSO_r1_Dam
+  K562_ActD_DMSO_r1_Ki67: K562_ActD_DMSO_r1_Dam
+  K562_ActD_DMSO_r1_H3K9me3: K562_ActD_DMSO_r1_Dam
+  K562_ActD_50ng_r1_LMNB1: K562_ActD_50ng_r1_Dam
+  K562_ActD_50ng_r1_Ki67: K562_ActD_50ng_r1_Dam
+  K562_ActD_50ng_r1_H3K9me3: K562_ActD_50ng_r1_Dam
+  
+  K562_ActD_DMSO_r2_LMNB1: K562_ActD_DMSO_r2_Dam
+  K562_ActD_DMSO_r2_Ki67: K562_ActD_DMSO_r2_Dam
+  K562_ActD_50ng_r2_LMNB1: K562_ActD_50ng_r2_Dam
+  K562_ActD_50ng_r2_Ki67: K562_ActD_50ng_r2_Dam
+  
+  K562_ActD_DMSO_r2_H3K9me3: K562_ActD_DMSO_r2_Dam
+  K562_ActD_50ng_r2_H3K9me3: K562_ActD_50ng_r2_Dam
+  
+  K562_ActD_DMSO_r3_H3K27me3: K562_ActD_DMSO_r3_Dam
+  K562_ActD_50ng_r3_H3K27me3: K562_ActD_50ng_r3_Dam
+  K562_ActD_DMSO_r4_H3K27me3: K562_ActD_DMSO_r4_Dam
+  K562_ActD_50ng_r4_H3K27me3: K562_ActD_50ng_r4_Dam
+  
+  K562_wt_r5_Ki67: K562_wt_r5_Dam
+  
+  K562_wt_rx1_LMNB1: K562_wt_rx1_Dam
+  K562_wt_rx1_H3K27me3: K562_wt_rx1_Dam
+  K562_wt_rx2_LMNB1: K562_wt_rx2_Dam
+  K562_wt_rx3_H3K27me3: K562_wt_rx3_Dam
+  K562_wt_rx3_H3K9me3: K562_wt_rx3_Dam
+  
+  
+  # IMR90 - wt
+  IMR90_wt_r1_LMNB1: IMR90_wt_r1_Dam
+  IMR90_wt_r1_Ki67: IMR90_wt_r1_Dam
+  
+  
+  # HFF - wt
+  HFF_wt_r1_LMNB1: HFF_wt_r1_Dam
+  HFF_wt_r1_Ki67: HFF_wt_r1_Dam
+  
+  HFF_wt_r2_LMNB1: HFF_wt_r2_Dam
+  HFF_wt_r2_Ki67: HFF_wt_r2_Dam
+  HFF_wt_r3_LMNB1: HFF_wt_r3_Dam
+  HFF_wt_r3_Ki67: HFF_wt_r3_Dam
+  
+  
+  # RPE - cell cycle time series
+  RPE_wt_r1_Ki67: RPE_wt_r1_Dam
+  RPE_0h_r1_Ki67: RPE_0h_r1_Dam
+  RPE_1h_r1_Ki67: RPE_1h_r1_Dam
+  RPE_3h_r1_Ki67: RPE_3h_r1_Dam
+  RPE_6h_r1_Ki67: RPE_6h_r1_Dam
+  RPE_10h_r1_Ki67: RPE_10h_r1_Dam
+  RPE_21h_r1_Ki67: RPE_21h_r1_Dam
+  
+  RPE_wt_r2_Ki67: RPE_wt_r2_Dam
+  RPE_0h_r2_Ki67: RPE_0h_r2_Dam
+  RPE_1h_r2_Ki67: RPE_1h_r2_Dam
+  RPE_3h_r2_Ki67: RPE_3h_r2_Dam
+  RPE_6h_r2_Ki67: RPE_6h_r2_Dam
+  RPE_10h_r2_Ki67: RPE_10h_r2_Dam
+  RPE_21h_r2_Ki67: RPE_21h_r2_Dam
+  
+  RPE_wt_r3_Ki67: RPE_wt_r3_Dam
+  RPE_wt_r3_H3K27me3: RPE_wt_r3_Dam
+  RPE_wt_r3_H3K9me3: RPE_wt_r3_Dam
+  RPE_ActD_DMSO_r3_Ki67: RPE_ActD_DMSO_r3_Dam
+  RPE_ActD_DMSO_r3_LMNB1: RPE_ActD_DMSO_r3_Dam
+  RPE_ActD_DMSO_r3_H3K27me3: RPE_ActD_DMSO_r3_Dam
+  RPE_ActD_DMSO_r3_H3K9me3: RPE_ActD_DMSO_r3_Dam
+  RPE_ActD_50ng_r3_Ki67: RPE_ActD_50ng_r3_Dam
+  RPE_ActD_50ng_r3_LMNB1: RPE_ActD_50ng_r3_Dam
+  RPE_ActD_50ng_r3_H3K27me3: RPE_ActD_50ng_r3_Dam
+  RPE_ActD_50ng_r3_H3K9me3: RPE_ActD_50ng_r3_Dam
+  RPE_Osm_0m_r3_Ki67: RPE_Osm_0m_r3_Dam
+  RPE_Osm_30m_r3_Ki67: RPE_Osm_30m_r3_Dam
+  RPE_Osm_180m_r3_Ki67: RPE_Osm_180m_r3_Dam
+  
+  RPE_wt_r4_Ki67: RPE_wt_r4_Dam
+  RPE_wt_r4_H3K27me3: RPE_wt_r4_Dam
+  RPE_wt_r4_H3K9me3: RPE_wt_r4_Dam
+  RPE_ActD_DMSO_r4_Ki67: RPE_ActD_DMSO_r4_Dam
+  RPE_ActD_DMSO_r4_LMNB1: RPE_ActD_DMSO_r4_Dam
+  RPE_ActD_DMSO_r4_H3K27me3: RPE_ActD_DMSO_r4_Dam
+  RPE_ActD_DMSO_r4_H3K9me3: RPE_ActD_DMSO_r4_Dam
+  RPE_ActD_50ng_r4_Ki67: RPE_ActD_50ng_r4_Dam
+  RPE_ActD_50ng_r4_LMNB1: RPE_ActD_50ng_r4_Dam
+  RPE_ActD_50ng_r4_H3K27me3: RPE_ActD_50ng_r4_Dam
+  RPE_ActD_50ng_r4_H3K9me3: RPE_ActD_50ng_r4_Dam
+  RPE_Osm_0m_r4_Ki67: RPE_Osm_0m_r4_Dam
+  RPE_Osm_30m_r4_Ki67: RPE_Osm_30m_r4_Dam
+  RPE_Osm_180m_r4_Ki67: RPE_Osm_180m_r4_Dam
+  
+  # RPE - Mitosis perturbations
+  RPE_H3K27me3inh_DMSO_r5_Ki67: RPE_H3K27me3inh_DMSO_r5_Dam
+  RPE_H3K27me3inh_GSK126_r5_Ki67: RPE_H3K27me3inh_GSK126_r5_Dam
+  RPE_H3K27me3inh_EED226_r5_Ki67: RPE_H3K27me3inh_EED226_r5_Dam
+  RPE_H3K27me3inh_mit_DMSO_r5_Ki67: RPE_H3K27me3inh_mit_DMSO_r5_Dam
+  RPE_H3K27me3inh_mit_GSK126_r5_Ki67: RPE_H3K27me3inh_mit_GSK126_r5_Dam
+  RPE_H3K27me3inh_mit_EED226_r5_Ki67: RPE_H3K27me3inh_mit_EED226_r5_Dam
+  RPE_noco_timeseries_30_r5_Ki67: RPE_noco_timeseries_30_r5_Dam
+  RPE_noco_timeseries_60_r5_Ki67: RPE_noco_timeseries_60_r5_Dam
+  RPE_noco_timeseries_90_r5_Ki67: RPE_noco_timeseries_90_r5_Dam
+  RPE_noco_timeseries_180_r5_Ki67: RPE_noco_timeseries_180_r5_Dam
+  
+  RPE_H3K27me3inh_DMSO_r6_Ki67: RPE_H3K27me3inh_DMSO_r6_Dam
+  RPE_H3K27me3inh_GSK126_r6_Ki67: RPE_H3K27me3inh_GSK126_r6_Dam
+  RPE_H3K27me3inh_EED226_r6_Ki67: RPE_H3K27me3inh_EED226_r6_Dam
+  RPE_H3K27me3inh_mit_DMSO_r6_Ki67: RPE_H3K27me3inh_mit_DMSO_r6_Dam
+  RPE_H3K27me3inh_mit_GSK126_r6_Ki67: RPE_H3K27me3inh_mit_GSK126_r6_Dam
+  RPE_H3K27me3inh_mit_EED226_r6_Ki67: RPE_H3K27me3inh_mit_EED226_r6_Dam
+  RPE_noco_timeseries_30_r6_Ki67: RPE_noco_timeseries_30_r6_Dam
+  RPE_noco_timeseries_60_r6_Ki67: RPE_noco_timeseries_60_r6_Dam
+  RPE_noco_timeseries_90_r6_Ki67: RPE_noco_timeseries_90_r6_Dam
+  RPE_noco_timeseries_180_r6_Ki67: RPE_noco_timeseries_180_r6_Dam
+  
+  # Old data
+  RPE_wt_rx1_LMNB1: RPE_wt_rx1_Dam
+  RPE_wt_rx2_LMNB1: RPE_wt_rx2_Dam
+  
+  # Inhibitors
+  HCT116_EpiInh_DMSO_r1_LMNB1: HCT116_EpiInh_DMSO_r1_Dam1
+  HCT116_EpiInh_DMSO_r1_4xAP3: HCT116_EpiInh_DMSO_r1_Dam2
+  HCT116_EpiInh_G9A_r1_LMNB1: HCT116_EpiInh_G9A_r1_Dam1
+  HCT116_EpiInh_G9A_r1_4xAP3: HCT116_EpiInh_G9A_r1_Dam2
+  HCT116_EpiInh_PRC2_r1_LMNB1: HCT116_EpiInh_PRC2_r1_Dam1
+  HCT116_EpiInh_PRC2_r1_4xAP3: HCT116_EpiInh_PRC2_r1_Dam2
+  HCT116_EpiInh_DKO_r1_LMNB1: HCT116_EpiInh_DKO_r1_Dam1
+  HCT116_EpiInh_DKO_r1_4xAP3: HCT116_EpiInh_DKO_r1_Dam2
+  
+
+# Replicate experiments
+replicates:
+
+  # HCT116 - ActD and wt
+  HCT116_wt_Ki67:
+    - HCT116_wt_r2_Ki67
+    - HCT116_wt_r3_Ki67
+    - HCT116_wt_r6_Ki67
+  HCT116_wt_LMNB1:
+    - HCT116_wt_r2_LMNB1
+    - HCT116_wt_rx1_LMNB1
+    - HCT116_wt_rx2_LMNB1
+  HCT116_wt_H3K27me3:
+    - HCT116_wt_r4_H3K27me3
+    - HCT116_wt_r5_H3K27me3
+  HCT116_wt_Ki67HPA:
+    - HCT116_wt_r7_Ki67HPA
+    - HCT116_wt_r8_Ki67HPA
+  HCT116_wt_Ki67NOV:
+    - HCT116_wt_r7_Ki67NOV
+    - HCT116_wt_r8_Ki67NOV
+    
+  HCT116_ActD_DMSO_LMNB1:
+    - HCT116_ActD_DMSO_r1_LMNB1
+    - HCT116_ActD_DMSO_r2_LMNB1
+  HCT116_ActD_DMSO_Ki67:
+    - HCT116_ActD_DMSO_r1_Ki67
+    - HCT116_ActD_DMSO_r2_Ki67
+  HCT116_ActD_DMSO_H3K9me3:
+    - HCT116_ActD_DMSO_r2_H3K9me3
+    - HCT116_ActD_DMSO_r3_H3K9me3
+  HCT116_ActD_DMSO_H3K27me3:
+    - HCT116_ActD_DMSO_r4_H3K27me3
+    - HCT116_ActD_DMSO_r5_H3K27me3
+  
+  HCT116_ActD_50ng_LMNB1:
+    - HCT116_ActD_50ng_r1_LMNB1
+    - HCT116_ActD_50ng_r2_LMNB1
+  HCT116_ActD_50ng_Ki67:
+    - HCT116_ActD_50ng_r1_Ki67
+    - HCT116_ActD_50ng_r2_Ki67
+  HCT116_ActD_50ng_H3K9me3:
+    - HCT116_ActD_50ng_r2_H3K9me3
+    - HCT116_ActD_50ng_r3_H3K9me3
+  HCT116_ActD_50ng_H3K27me3:
+    - HCT116_ActD_50ng_r4_H3K27me3
+    - HCT116_ActD_50ng_r5_H3K27me3
+    
+  
+  # HCT116 - Ki67 AID
+  HCT116_AID_ctrl_LMNB1:
+    - HCT116_AID_ctrl_r1_LMNB1
+    - HCT116_AID_ctrl_r2_LMNB1
+    - HCT116_AID_ctrl_r3_LMNB1
+  HCT116_AID_ctrl_Ki67:
+    - HCT116_AID_ctrl_r2_Ki67
+    - HCT116_AID_ctrl_r3_Ki67
+  HCT116_AID_ctrl_H3K9me3:
+    - HCT116_AID_ctrl_r2_H3K9me3
+    - HCT116_AID_ctrl_r3_H3K9me3
+  HCT116_AID_ctrl_H3K27me3:
+    - HCT116_AID_ctrl_r2_H3K27me3
+    - HCT116_AID_ctrl_r3_H3K27me3
+  
+  HCT116_AID_ctrl_IAA_LMNB1:
+    - HCT116_AID_ctrl_IAA_r1_LMNB1
+    - HCT116_AID_ctrl_IAA_r2_LMNB1
+    - HCT116_AID_ctrl_IAA_r3_LMNB1
+  HCT116_AID_ctrl_IAA_Ki67:
+    - HCT116_AID_ctrl_IAA_r2_Ki67
+    - HCT116_AID_ctrl_IAA_r3_Ki67
+  HCT116_AID_ctrl_IAA_H3K9me3:
+    - HCT116_AID_ctrl_IAA_r2_H3K9me3
+    - HCT116_AID_ctrl_IAA_r3_H3K9me3
+  HCT116_AID_ctrl_IAA_H3K27me3:
+    - HCT116_AID_ctrl_IAA_r2_H3K27me3
+    - HCT116_AID_ctrl_IAA_r3_H3K27me3
+  
+  HCT116_AID_thy_LMNB1:
+    - HCT116_AID_thy_r1_LMNB1
+    - HCT116_AID_thy_r2_LMNB1
+  HCT116_AID_thy_IAA_LMNB1:
+    - HCT116_AID_thy_IAA_r1_LMNB1
+    - HCT116_AID_thy_IAA_r2_LMNB1
+  HCT116_AID_RO_LMNB1:
+    - HCT116_AID_RO_r2_LMNB1
+    - HCT116_AID_RO_r3_LMNB1
+  HCT116_AID_RO_IAA_LMNB1:
+    - HCT116_AID_RO_IAA_r1_LMNB1
+    - HCT116_AID_RO_IAA_r2_LMNB1
+  
+  HCT116_AID_doublethy_Ki67:
+    - HCT116_AID_doublethy_r4_Ki67
+    - HCT116_AID_doublethy_r5_Ki67
+  HCT116_AID_doublethy_LMNB1:
+    - HCT116_AID_doublethy_r4_LMNB1
+    - HCT116_AID_doublethy_r5_LMNB1
+  HCT116_AID_doublethy_H3K27me3:
+    - HCT116_AID_doublethy_r4_H3K27me3
+    - HCT116_AID_doublethy_r5_H3K27me3
+  HCT116_AID_doublethy_H3K9me3:
+    - HCT116_AID_doublethy_r4_H3K9me3
+    - HCT116_AID_doublethy_r5_H3K9me3
+  
+  HCT116_AID_doublethy_IAA_Ki67:
+    - HCT116_AID_doublethy_IAA_r4_Ki67
+    - HCT116_AID_doublethy_IAA_r5_Ki67
+  HCT116_AID_doublethy_IAA_LMNB1:
+    - HCT116_AID_doublethy_IAA_r4_LMNB1
+    - HCT116_AID_doublethy_IAA_r5_LMNB1
+  HCT116_AID_doublethy_IAA_H3K27me3:
+    - HCT116_AID_doublethy_IAA_r4_H3K27me3
+    - HCT116_AID_doublethy_IAA_r5_H3K27me3
+  HCT116_AID_doublethy_IAA_H3K9me3:
+    - HCT116_AID_doublethy_IAA_r4_H3K9me3
+    - HCT116_AID_doublethy_IAA_r5_H3K9me3
+  
+  HCT116_AID_RO_Ki67:
+    - HCT116_AID_RO_r4_Ki67
+    - HCT116_AID_RO_r5_Ki67
+  HCT116_AID_RO_H3K27me3:
+    - HCT116_AID_RO_r4_H3K27me3
+    - HCT116_AID_RO_r5_H3K27me3
+  HCT116_AID_RO_H3K9me3:
+    - HCT116_AID_RO_r4_H3K9me3
+    - HCT116_AID_RO_r5_H3K9me3
+  
+  HCT116_AID_RO_IAA_Ki67:
+    - HCT116_AID_RO_IAA_r4_Ki67
+    - HCT116_AID_RO_IAA_r5_Ki67
+  HCT116_AID_RO_IAA_H3K27me3:
+    - HCT116_AID_RO_IAA_r4_H3K27me3
+    - HCT116_AID_RO_IAA_r5_H3K27me3
+  HCT116_AID_RO_IAA_H3K9me3:
+    - HCT116_AID_RO_IAA_r4_H3K9me3
+    - HCT116_AID_RO_IAA_r5_H3K9me3
+  
+  
+  # K562 - ActD and wt
+  K562_wt_Ki67:
+    - K562_wt_r1_Ki67
+    - K562_wt_r2_Ki67
+    - K562_wt_r5_Ki67
+  K562_wt_LMNB1:
+    - K562_wt_r1_LMNB1
+    - K562_wt_rx1_LMNB1
+    - K562_wt_rx2_LMNB1
+  K562_wt_H3K27me3:
+    - K562_wt_rx1_H3K27me3
+    - K562_wt_rx3_H3K27me3
+  K562_wt_H3K9me3:
+    - K562_wt_r2_H3K9me3
+    - K562_wt_rx3_H3K9me3
+    
+  K562_ActD_DMSO_LMNB1:
+    - K562_ActD_DMSO_r1_LMNB1
+    - K562_ActD_DMSO_r2_LMNB1
+  K562_ActD_DMSO_Ki67:
+    - K562_ActD_DMSO_r1_Ki67
+    - K562_ActD_DMSO_r2_Ki67
+  K562_ActD_DMSO_H3K9me3:
+    - K562_ActD_DMSO_r1_H3K9me3
+    - K562_ActD_DMSO_r2_H3K9me3
+  K562_ActD_DMSO_H3K27me3:
+    - K562_ActD_DMSO_r3_H3K27me3
+    - K562_ActD_DMSO_r4_H3K27me3
+  
+  K562_ActD_50ng_LMNB1:
+    - K562_ActD_50ng_r1_LMNB1
+    - K562_ActD_50ng_r2_LMNB1
+  K562_ActD_50ng_Ki67:
+    - K562_ActD_50ng_r1_Ki67
+    - K562_ActD_50ng_r2_Ki67
+  K562_ActD_50ng_H3K9me3:
+    - K562_ActD_50ng_r1_H3K9me3
+    - K562_ActD_50ng_r2_H3K9me3
+  K562_ActD_50ng_H3K27me3:
+    - K562_ActD_50ng_r3_H3K27me3
+    - K562_ActD_50ng_r4_H3K27me3
+    
+    
+  # RPE - various
+  RPE_wt_Ki67:
+    - RPE_wt_r1_Ki67
+    - RPE_wt_r2_Ki67
+    - RPE_wt_r3_Ki67
+    - RPE_wt_r4_Ki67
+  RPE_wt_LMNB1:
+    - RPE_wt_rx1_LMNB1
+    - RPE_wt_rx2_LMNB1
+  RPE_wt_H3K27me3:
+    - RPE_wt_r3_H3K27me3
+    - RPE_wt_r4_H3K27me3
+  RPE_wt_H3K9me3:
+    - RPE_wt_r3_H3K9me3
+    - RPE_wt_r4_H3K9me3
+  
+  RPE_0h_Ki67:
+    - RPE_0h_r1_Ki67
+    - RPE_0h_r2_Ki67
+  RPE_1h_Ki67:
+    - RPE_1h_r1_Ki67
+    - RPE_1h_r2_Ki67
+  RPE_3h_Ki67:
+    - RPE_3h_r1_Ki67
+    - RPE_3h_r2_Ki67
+  RPE_6h_Ki67:
+    - RPE_6h_r1_Ki67
+    - RPE_6h_r2_Ki67
+  RPE_10h_Ki67:
+    - RPE_10h_r1_Ki67
+    - RPE_10h_r2_Ki67
+  RPE_21h_Ki67:
+    - RPE_21h_r1_Ki67
+    - RPE_21h_r2_Ki67
+  
+  RPE_ActD_DMSO_Ki67:
+    - RPE_ActD_DMSO_r3_Ki67
+    - RPE_ActD_DMSO_r4_Ki67
+  RPE_ActD_DMSO_LMNB1:
+    - RPE_ActD_DMSO_r3_LMNB1
+    - RPE_ActD_DMSO_r4_LMNB1
+  RPE_ActD_DMSO_H3K27me3:
+    - RPE_ActD_DMSO_r3_H3K27me3
+    - RPE_ActD_DMSO_r4_H3K27me3
+  RPE_ActD_DMSO_H3K9me3:
+    - RPE_ActD_DMSO_r3_H3K9me3
+    - RPE_ActD_DMSO_r4_H3K9me3
+  RPE_ActD_50ng_Ki67:
+    - RPE_ActD_50ng_r3_Ki67
+    - RPE_ActD_50ng_r4_Ki67
+  RPE_ActD_50ng_LMNB1:
+    - RPE_ActD_50ng_r3_LMNB1
+    - RPE_ActD_50ng_r4_LMNB1
+  RPE_ActD_50ng_H3K27me3:
+    - RPE_ActD_50ng_r3_H3K27me3
+    - RPE_ActD_50ng_r4_H3K27me3
+  RPE_ActD_50ng_H3K9me3:
+    - RPE_ActD_50ng_r3_H3K9me3
+    - RPE_ActD_50ng_r4_H3K9me3
+  
+  RPE_Osm_0m_Ki67:
+    - RPE_Osm_0m_r3_Ki67
+    - RPE_Osm_0m_r4_Ki67
+  RPE_Osm_30m_Ki67:
+    - RPE_Osm_30m_r3_Ki67
+    - RPE_Osm_30m_r4_Ki67
+  RPE_Osm_180m_Ki67:
+    - RPE_Osm_180m_r3_Ki67
+    - RPE_Osm_180m_r4_Ki67
+  
+  RPE_H3K27me3inh_DMSO_Ki67:
+    - RPE_H3K27me3inh_DMSO_r5_Ki67
+    - RPE_H3K27me3inh_DMSO_r6_Ki67
+  RPE_H3K27me3inh_GSK126_Ki67:
+    - RPE_H3K27me3inh_GSK126_r5_Ki67
+    - RPE_H3K27me3inh_GSK126_r6_Ki67
+  RPE_H3K27me3inh_EED226_Ki67:
+    - RPE_H3K27me3inh_EED226_r5_Ki67
+    - RPE_H3K27me3inh_EED226_r6_Ki67
+  
+  RPE_H3K27me3inh_mit_DMSO_Ki67:
+    - RPE_H3K27me3inh_mit_DMSO_r5_Ki67
+    - RPE_H3K27me3inh_mit_DMSO_r6_Ki67
+  RPE_H3K27me3inh_mit_GSK126_Ki67:
+    - RPE_H3K27me3inh_mit_GSK126_r5_Ki67
+    - RPE_H3K27me3inh_mit_GSK126_r6_Ki67
+  RPE_H3K27me3inh_mit_EED226_Ki67:
+    - RPE_H3K27me3inh_mit_EED226_r5_Ki67
+    - RPE_H3K27me3inh_mit_EED226_r6_Ki67
+  
+  RPE_noco_timeseries_30_Ki67:
+    - RPE_noco_timeseries_30_r5_Ki67
+    - RPE_noco_timeseries_30_r6_Ki67
+  RPE_noco_timeseries_60_Ki67:
+    - RPE_noco_timeseries_60_r5_Ki67
+    - RPE_noco_timeseries_60_r6_Ki67
+  RPE_noco_timeseries_90_Ki67:
+    - RPE_noco_timeseries_90_r5_Ki67
+    - RPE_noco_timeseries_90_r6_Ki67
+  RPE_noco_timeseries_180_Ki67:
+    - RPE_noco_timeseries_180_r5_Ki67
+    - RPE_noco_timeseries_180_r6_Ki67

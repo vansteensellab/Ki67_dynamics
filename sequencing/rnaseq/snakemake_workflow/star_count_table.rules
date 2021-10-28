@@ -1,0 +1,37 @@
+# Validate parameters
+
+if not "ct_prefix" in config["star"].keys():
+    sys.exit("Count table filename prefix must be defined in the 'star' section of the config file")
+
+# Rule
+rule star_count_table:
+  """
+  Collapse read counts by gene into count table (input for DE analysis)
+  Column names are sample names
+  Note: currently implemented for unstranded RNA-seq; can be surely streamlined.
+  """
+    input:
+        tab = expand(os.path.join(res_dir, 'Star/{sample}_ReadsPerGene.out.tab'), sample = SAMPLE_IDS)
+    output:
+        count_table = os.path.join(res_dir, 'Star', config['star']['ct_prefix']) + '.tsv',
+        gene_names  = temp(os.path.join(res_dir, 'Star', 'gene_names.txt')),
+        temp_1      = temp('tmp_sct_1.txt'),
+        temp_2      = temp('tmp_sct_2.txt')
+    params:
+        col_names   = '\t'.join(expand('{sample}', sample = SAMPLE_IDS))
+    log:
+        os.path.join(log_dir, 'star/count_table.log')
+    threads: 1
+    shell:
+        """
+        touch {output.count_table}
+        for file in {input.tab}; do
+            cut -f1 $file > {output.gene_names}
+            cut -f2 $file > {output.temp_1}
+            paste -d '\t' {output.count_table} {output.temp_1} > {output.temp_2}
+            mv {output.temp_2} {output.count_table}
+        done
+
+        paste -d '\t' {output.gene_names} {output.count_table} | tail -n +5 | cut --complement -f2 > {output.temp_2}
+        echo -e "sample.id\t{params.col_names}" | cat - {output.temp_2} > {output.count_table}
+        """

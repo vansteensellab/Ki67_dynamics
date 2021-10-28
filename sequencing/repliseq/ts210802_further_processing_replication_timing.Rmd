@@ -1,0 +1,384 @@
+---
+title: "4DN DamID - Ki67 project - Replication timing"
+author: "Tom van Schaik"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output: 
+  html_document:
+    theme: journal #cerulean
+    highlight: monochrome
+    toc: true
+    toc_float: true
+    code_folding: show
+  editor_options:
+    chunk_output_type: console
+---
+
+### Project
+
+Mapping of Ki67 interactions with the genome and comparison with lamina 
+interactions.
+
+
+### Introduction
+
+Processing of replication timing. I already trimmed, mapped and counted the 
+reads in 50kb bins. In this document, I will do the remaining processing:
+
+  * Counts-per-million normalization
+  * Log2-ratios of early / late
+  * Quantile normalization
+  * Optionally: smoothing
+  
+I will write the data as .rds file, and prepare bigwig files.
+
+
+### Method
+
+See introduction.
+
+
+### Set-up
+
+Set the parameters and list the data.
+
+```{r set-up, warning = F, message = F, cache = T}
+
+# Load dependencies - without warnings / messages
+library(tidyverse)
+library(GenomicRanges)
+library(rtracklayer)
+library(ggplot2)
+library(preprocessCore) # quantile normalization
+
+# Prepare output 
+output_dir <- "ts210802_further_processing_replication_timing"
+dir.create(output_dir, showWarnings = FALSE)
+
+
+# Load input
+chromosomes <- c(paste0("chr", 1:22), "chrX")
+
+
+# Prepare seqnames
+chrom_sizes <- read_tsv("~/mydata/data/genomes/GRCh38/hg38.chrom.sizes",
+                        col_names = c("seqnames", "length"))
+
+```
+
+```{r knits setup}
+library(knitr)
+opts_chunk$set(fig.width = 5, fig.height = 3.5, cache = T,
+               dev=c('png', 'pdf'), 
+               fig.path = file.path(output_dir, "figures/")) 
+pdf.options(useDingbats = FALSE)
+```
+
+```{r functions}
+
+
+```
+
+
+### 1. Load counts
+
+Load counts.
+
+```{r load counts}
+
+# Read counts
+counts <- read_tsv("ts210802_repliseq/deeptools/deeptools_bam_coverage.tab")
+
+# Reformatting
+counts <- counts %>%
+  rename_at(1:3, ~ c("seqnames", "start", "end")) %>%
+  rename_at(4:ncol(.), str_remove_all, "'") %>%
+  mutate(start = start + 1) %>%
+  filter(seqnames %in% chromosomes) %>%
+  mutate(seqnames = factor(seqnames, levels = chromosomes)) %>%
+  arrange(seqnames, start) %>%
+  mutate(seqnames = as.character(seqnames))
+
+```
+
+
+### 2. Normalization
+
+First, normalize to cpm. Also, bins < 10 reads are removed from further
+analyses.
+
+```{r normalize to cpm}
+
+# Prepare metadata
+samples <- names(counts)[4:ncol(counts)]
+
+metadata <- tibble(sample = samples) %>%
+  mutate(fraction = ifelse(str_detect(sample, "_e_"),
+                           "early", "late"),
+         iaa = ifelse(str_detect(sample, "no_iaa"),
+                      "no_iaa", "iaa"),
+         lane = ifelse(str_detect(sample, "L001"),
+                       "L001", "L002"),
+         rep = ifelse(str_detect(sample, "r1"),
+                      "r1", "r2")) %>%
+  mutate(experiment = paste("HCT116", iaa, rep, sep = "_"),
+         experiment_fraction = paste("HCT116", iaa, fraction, rep, sep = "_"))
+
+# Combine lanes
+counts_lanes <- counts %>%
+  mutate(
+    HCT116_no_iaa_early_r1 = 
+      hct116_no_iaa_r1_e_S35_L001_R1 + 
+      hct116_no_iaa_r1_e_S35_L002_R1,
+    HCT116_no_iaa_late_r1 = 
+      hct116_no_iaa_r1_l_S36_L001_R1 + 
+      hct116_no_iaa_r1_l_S36_L002_R1,
+    HCT116_iaa_early_r1 = 
+      hct116_iaa_r1_e_S37_L001_R1 + 
+      hct116_iaa_r1_e_S37_L002_R1,
+    HCT116_iaa_late_r1 = 
+      hct116_iaa_r1_l_S38_L001_R1 + 
+      hct116_iaa_r1_l_S38_L002_R1,
+    HCT116_no_iaa_early_r2 = 
+      hct116_no_iaa_r2_e_S43_L001_R1 + 
+      hct116_no_iaa_r2_e_S43_L002_R1,
+    HCT116_no_iaa_late_r2 = 
+      hct116_no_iaa_r2_l_S44_L001_R1 + 
+      hct116_no_iaa_r2_l_S44_L002_R1,
+    HCT116_iaa_early_r2 = 
+      hct116_iaa_r2_e_S45_L001_R1 + 
+      hct116_iaa_r2_e_S45_L002_R1,
+    HCT116_iaa_late_r2 = 
+      hct116_iaa_r2_l_S46_L001_R1 + 
+      hct116_iaa_r2_l_S46_L002_R1
+  ) %>%
+  dplyr::select(-contains("_S"))
+
+
+# Normalize to cpm
+cpm <- function(x, min_count = 0) {
+  # Normalize vector to cpm (total count: 1M)
+  x_cpm <- x / sum(x) * 1e6
+  x_cpm[x < min_count] <- NA
+  
+  x_cpm
+}
+
+counts_norm <- counts_lanes %>%
+  mutate_at(all_of(unique(metadata$experiment_fraction)), cpm)
+
+
+# Finally, remove values for rows with too few reads (in absolute numbers)
+min_reads <- 10
+
+idx_not_enough_reads <- counts_lanes %>%
+  dplyr::select(4:ncol(.)) %>%
+  mutate_all(function(x) x >= min_reads) %>%
+  mutate(sum = rowSums(.),
+         idx = sum <= 3) %>%
+  pull(idx)
+
+counts_norm[idx_not_enough_reads, 4:ncol(counts_norm)] <- NA
+
+  
+```
+
+Then, calculate log2-ratio of E/L.
+
+```{r early late ratio}
+
+# Log2-ratio
+norm <- counts_norm %>%
+  mutate(
+    HCT116_no_iaa_early_r1 = 
+      log2((HCT116_no_iaa_early_r1 + 1) / 
+             (HCT116_no_iaa_late_r1 + 1)),
+    HCT116_iaa_early_r1 = 
+      log2((HCT116_iaa_early_r1 + 1) / 
+             (HCT116_iaa_late_r1 + 1)),
+    HCT116_no_iaa_early_r2 = 
+      log2((HCT116_no_iaa_early_r2 + 1) / 
+             (HCT116_no_iaa_late_r2 + 1)),
+    HCT116_iaa_early_r2 = 
+      log2((HCT116_iaa_early_r2 + 1) / 
+             (HCT116_iaa_late_r2 + 1))) %>%
+  dplyr::select(-contains("late"))
+
+# Quantile normalization
+norm_quant <- norm
+norm_quant[, 4:ncol(norm_quant)] <- norm_quant %>%
+  dplyr::select(4:ncol(.)) %>%
+  as.matrix() %>%
+  normalize.quantiles(.)
+  
+
+```
+
+Finally, get the mean between the replicates to use in downstream analyses.
+
+```{r mean between replicates}
+
+# Average between replicates
+norm_average <- norm_quant %>%
+  rowwise() %>%
+  mutate(
+    HCT116_no_iaa = 
+      mean(c(HCT116_no_iaa_early_r1, 
+             HCT116_no_iaa_early_r2), 
+           na.rm = T),
+    HCT116_iaa = 
+      mean(c(HCT116_iaa_early_r1, 
+             HCT116_iaa_early_r2), 
+           na.rm = T)
+  ) %>%
+  ungroup() %>%
+  dplyr::select(-contains("_r"))
+
+```
+
+### 3. Create bigwigs
+
+Finally, create bigwigs of the (quantile) normalized tracks.
+
+```{r prepare bigwigs}
+
+# Function
+ExportBWFromTibble <- function(tib, bigwig_dir, column = "diff", name = NULL) {
+  
+  # Set name as column
+  if (is.null(name)) name <- column
+  
+  # Get GRanges from Tibble
+  gr <- tib %>%
+    dplyr::select(1:3, all_of(column)) %>%
+    drop_na() %>%
+    dplyr::rename_at(4, ~ "score") %>%
+    as(., "GRanges")
+  
+  # Exception: LADs and SPIN states
+  if (grepl("LAD", column)) {
+    gr$score <- ifelse(gr$score == "LAD", 1, 0)
+  }
+  
+  if (grepl("SPIN", column)) {
+    return(NULL)
+  }
+  
+  # Add chromosome information
+  seqlengths(gr) <- chrom_sizes$length[match(seqlevels(gr),
+                                             chrom_sizes$seqnames)]
+  
+  # Write bigwig
+  export.bw(object = gr,
+            con = file.path(bigwig_dir, paste0(name, ".bw")))
+  
+}
+
+BWsFromTibble <- function(tib) {
+  invisible(lapply(names(tib)[4:ncol(tib)],
+                   function(sample) {
+                     ExportBWFromTibble(tib,
+                                        bigwig_dir = bigwig_dir,
+                                        column = sample)
+                   }
+  ))
+}
+
+# Prepare bigwigs - normalized
+bigwig_dir <- file.path(output_dir, "bigwig")
+dir.create(bigwig_dir, showWarnings = F)
+
+BWsFromTibble(norm_quant)
+BWsFromTibble(norm_average)
+
+# Prepare bigwigs - counts
+bigwig_dir <- file.path(output_dir, "bigwig_counts")
+dir.create(bigwig_dir, showWarnings = F)
+
+BWsFromTibble(counts_norm)
+
+```
+
+
+### 4. Plots
+
+I want to make some plots.
+
+```{r plots}
+
+# Correlation between replicates - before and after quantile
+norm %>%
+  ggplot(aes(x = HCT116_no_iaa_early_r1, y =HCT116_no_iaa_early_r2)) +
+  geom_point(alpha = 0.1) +
+  geom_abline(intercept = 0, slope = 1, col = "red") +
+  ggtitle("Before quantile") +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+norm_quant %>%
+  ggplot(aes(x = HCT116_no_iaa_early_r1, y =HCT116_no_iaa_early_r2)) +
+  geom_point(alpha = 0.1) +
+  geom_abline(intercept = 0, slope = 1, col = "red") +
+  ggtitle("After quantile") +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+
+# Correlation between +IAA and -IAA - before and after quantile
+norm %>%
+  ggplot(aes(x = HCT116_no_iaa_early_r1, y =HCT116_iaa_early_r2)) +
+  geom_point(alpha = 0.1) +
+  geom_abline(intercept = 0, slope = 1, col = "red") +
+  ggtitle("Before quantile") +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+norm_quant %>%
+  ggplot(aes(x = HCT116_no_iaa_early_r1, y =HCT116_iaa_early_r2)) +
+  geom_point(alpha = 0.1) +
+  geom_abline(intercept = 0, slope = 1, col = "red") +
+  ggtitle("After quantile") +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+norm_average %>%
+  ggplot(aes(x = HCT116_no_iaa, y =HCT116_iaa)) +
+  geom_point(alpha = 0.1) +
+  geom_abline(intercept = 0, slope = 1, col = "red") +
+  ggtitle("Average after quantile") +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+```
+
+These plots show that some normalization is good. Quantile might be a bit
+overkill, but this is always used for replication timing as I understood.
+
+
+### Conclusions
+
+I previously received repliseq data from Ethan. However, there was some
+confusion whether his analyses were sound. I decided to repeat everything to
+be sure of the results. This analysis is mostly using the same strategy / 
+tools as the pA-DamID processing. 
+
+Regarding the previous conclusions ("nothing really changes except near 
+centromeres"), I can see that this conclusion is not affected. Furthermore,
+I did solve the issues: strange coverage at centromeres + no coverage at X
+chromosome.
+
+
+### Session info
+
+```{r save data}
+
+# Save RDS files of the ranges
+saveRDS(norm_quant, file.path(output_dir, "tib_norm_quant.rds"))
+saveRDS(norm_average, file.path(output_dir, "tib_norm_average.rds"))
+saveRDS(metadata, file.path(output_dir, "tib_repliseq_metadata.rds"))
+
+```
+
+```{r session info}
+sessionInfo()
+```
+

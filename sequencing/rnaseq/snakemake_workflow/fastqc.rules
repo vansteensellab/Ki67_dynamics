@@ -1,0 +1,43 @@
+# Set parameters
+
+if not "fastqc" in config.keys():
+    config["fastqc"] = {}
+
+if not "other_options" in config["fastqc"].keys():
+    config["fastqc"]["other_options"] = ""
+
+if not "input_format" in config["metadata"].keys():
+    config["metadata"]["input_format"] = "fastq"
+
+def get_fastqc_input(): 
+    if(seq_type == 'se'):
+        reads = fastq_dir + '/' + '{sample}' + mate_suffix[0] + '.' + ext
+    else:
+        reads = [fastq_dir + '/' + '{sample}' + mate_suffix[0] + '.' + ext, fastq_dir + '/' + '{sample}' + mate_suffix[1] + '.' + ext]
+    return(reads)
+
+# Rule
+rule fastqc:
+  """
+  Run FastQC
+  Results are stored in FastQC/
+  Custom parameters specified in the configuration file with the
+  option config["fastqc"]["other_options"] will be passed to fastqc.
+  """
+    input:
+        reads = get_fastqc_input()
+    output:
+        os.path.join(res_dir, 'FastQC/{sample}' + mate_suffix[0] + '_fastqc.html')
+    params:
+        out_dir = os.path.join(res_dir, 'FastQC'),
+        options = config["fastqc"]["other_options"]
+    log:
+        os.path.join(log_dir, 'fastqc/{sample}.log')
+    conda:
+        '/home/f.comoglio/gitlab/smk-pip/envs/fastqc.yaml'
+    threads: 2
+    shell:
+        """
+        mkdir -p {params.out_dir}
+        fastqc --outdir {params.out_dir} --threads {threads} {params.options} {input.reads} &> {log}
+        """

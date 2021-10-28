@@ -1,0 +1,52 @@
+###############
+# Global params
+
+  # for records
+  description:         'RNA-seq read mapping'
+  dataset:             'RNA-seq HCT116 Ki67AID and Maxs samples'
+
+  # params
+  genome:
+    organism:          'Homo sapiens'
+    fasta_file:        '/home/t.v.schaik/mydata/data/genomes/GRCh38/ENCODE/GRCh38_no_alt_analysis_set_GCA_000001405.15.fasta'
+    gencode_annot:     '/home/t.v.schaik/mydata/data/gene_builds/GRCh38/gencode.v24.primary_assembly.annotation.gtf'
+    star_index_dir:    '/home/t.v.schaik/mydata/data/genomes/GRCh38/ENCODE/star_index'
+    chrom_sizes:       '/home/t.v.schaik/mydata/data/genomes/GRCh38/hg38.chrom.sizes'
+
+  metadata:
+    samples:           '/home/t.v.schaik/mydata/proj/3D_nucleus/results/ts210514_RNAseq_Ki67_depletion/ts210514_metadata_PE.tsv'
+    seq_type:          'pe'                                                  # se or pe
+    mate_suffix:       '_R1_001,_R2_001'                                     # for PE reads, the mate suffix
+    input_format:      'fastq.gz'                                            # of the raw reads
+
+  dir:
+    fastq_dir:         '/shared/gcf/l.dauban/6403/fastq_files'
+                                                                             # Note: the genome files are not placed within a single folder. 
+    genome:            ''                                                    # Required. Directory containing genome files, annotations, and genome index.
+    results:           'results_pe'                                          # Required. Directory containing all result files that are produced by the pipeline
+    logs:              'logs'
+    # snakerules:        'Federico_workflow'                                 # Required. Location of the Snakemake rules folder
+    snakerules:        ''                                                    # Required. Location of the Snakemake rules folder
+
+###############
+# Optional params
+# used by rules & programs other than defaults
+
+  fastqc:
+    other_options: '--quiet'
+
+  star:
+    other_options: 'clip5pNbases 0 --outWigStrand Unstranded'
+    ct_prefix:     'count_table' # count table filename prefix
+
+################
+# Notes:
+# e.g. to generate metadata file for snakemake run:
+# grep RNA GSE72164_metadata_concat.tsv > tmp.tsv; echo -e "sample.id\tsra.run.files" | cat - tmp.tsv > 2018_03_09_smk_rnaseq.tsv; rm tmp.tsv
+# pipeline uses sample.id column
+
+# dry run this snakemake pipeline
+# snakemake -n --snakefile ~/gitlab/smk-pip/workflows/rnaseq.wf --configfile ~/gitlab/smk-pip/config/config_read_mapping_rnaseq.yaml
+
+# run this snakemake pipeline
+# snakemake --cores 24 --use-conda --snakefile ~/gitlab/smk-pip/workflows/rnaseq.wf --configfile ~/gitlab/smk-pip/config/config_read_mapping_rnaseq.yaml

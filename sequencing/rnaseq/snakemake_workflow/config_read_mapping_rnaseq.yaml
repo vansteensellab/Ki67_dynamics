@@ -1,0 +1,50 @@
+###############
+# Global params
+
+  # for records
+  description:         'RNA-seq read mapping'
+  dataset:             'RNA-seq Joshi et al.'
+
+  # params
+  genome:
+    organism:          'Mus musculus'
+    fasta_file:        'GRCm38.p5.genome.fa'
+    gencode_annot:     'gencode.vM16.annotation.gtf'
+    star_index_dir:    '/home/f.comoglio/mydata/Annotations/Genomes/mm10_gencode_v_m16/star_index'
+    chrom_sizes:       'mm10_gencode_v_m16.chrom.sizes'
+
+  metadata:
+    samples:           '/home/f.comoglio/mydata/Projects/EPmatrix/Pub/GSE72164/Rna-seq/Metadata/2018_03_09_smk_rnaseq.tsv'
+    seq_type:          'se'                                                  # se or pe
+    mate_suffix:       '_1,_2' # for PE reads, the mate suffix
+    input_format:      'fastq.gz'                                            # of the raw reads
+
+  dir:
+    fastq_dir:         '/home/f.comoglio/mydata/Projects/EPmatrix/Pub/GSE72164/Rna-seq/Raw'
+    genome:            '/home/f.comoglio/mydata/Annotations/Genomes/mm10_gencode_v_m16'    # Required. Directory containing genome files, annotations, and genome index.
+    results:           'Results'                                         # Required. Directory containing all result files that are produced by the pipeline
+    logs:              'Logs'
+    snakerules:        '/home/f.comoglio/gitlab/smk-pip/rules'           # Required. Location of the Snakemake rules folder
+
+###############
+# Optional params
+# used by rules & programs other than defaults
+
+  fastqc:
+    other_options: '--quiet'
+
+  star:
+    other_options: 'clip5pNbases 0 --outWigStrand Unstranded'
+    ct_prefix:     'count_table' # count table filename prefix
+
+################
+# Notes:
+# e.g. to generate metadata file for snakemake run:
+# grep RNA GSE72164_metadata_concat.tsv > tmp.tsv; echo -e "sample.id\tsra.run.files" | cat - tmp.tsv > 2018_03_09_smk_rnaseq.tsv; rm tmp.tsv
+# pipeline uses sample.id column
+
+# dry run this snakemake pipeline
+# snakemake -n --snakefile ~/gitlab/smk-pip/workflows/rnaseq.wf --configfile ~/gitlab/smk-pip/config/config_read_mapping_rnaseq.yaml
+
+# run this snakemake pipeline
+# snakemake --cores 24 --use-conda --snakefile ~/gitlab/smk-pip/workflows/rnaseq.wf --configfile ~/gitlab/smk-pip/config/config_read_mapping_rnaseq.yaml

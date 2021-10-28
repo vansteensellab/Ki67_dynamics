@@ -1,0 +1,78 @@
+# Validate parameters
+
+if not "genome" in config["dir"].keys():
+    sys.exit("Genome dir must be defined in the 'dir' section of the config file")
+
+if not "star_index_dir" in config["genome"].keys():
+    sys.exit("The STAR index directory must be defined in the config file")
+
+if not 'seq_type' in config['metadata'].keys():
+    sys.exit('Sequencing type (single or paired ends) must be defined in the config file')
+
+if config['metadata']['seq_type'] == 'pe' and not 'mate_suffix' in config['metadata'].keys():
+    sys.exit('The param seq_type/mate_suffix must be defined when analysing paired end data')
+
+if not 'samples' in config['metadata'].keys():
+    sys.exit('You must define the location of the sample metadata containing sample identifiers.')
+
+if not 'chrom_sizes' in config['genome'].keys():
+    sys.exit('Chromosome sizes file must be defined in the genome section of the config file')
+
+def get_star_input():
+    if(seq_type == 'se'):
+        # reads = fastq_dir + '/' + '{sample}' + mate_suffix[0] + '.' + ext
+        reads = res_dir + '/FastP/' + '{sample}' + '_trim' + mate_suffix[0] + '.' + ext
+    else:
+        # reads = [fastq_dir + '/' + '{sample}' + mate_suffix[0] + '.' + ext, fastq_dir + '/' + '{sample}' + mate_suffix[1] + '.' + ext]
+        reads = [res_dir + '/FastP/' + '{sample}' + '_trim' + mate_suffix[0] + '.' + ext, res_dir + '/FastP/' + '{sample}' + '_trim' + mate_suffix[1] + '.' + ext]
+    return(reads)
+
+# Rule
+rule star_aln:
+  """
+  Align short reads to reference genome using STAR
+  Quantify gene and transcript counts on the fly
+  Generate bedGraph tracks on the fly
+  Convert bedGraph to bigwig
+  Output folder: Star_aln/
+  """
+    input:
+        reads          = get_star_input(),
+        star_index     = os.path.join(star_index_dir, 'SAindex')
+    output:
+        tab            = os.path.join(res_dir, 'Star/{sample}_ReadsPerGene.out.tab')
+    params:
+        seq_type       = seq_type,
+        star_index_dir = star_index_dir,
+        out_dir_prefix = os.path.join(res_dir, 'Star/{sample}_'),
+        options        = config['star']['other_options'],
+        chrom_sizes    = chrom_sizes,
+        sample         = '{sample}',
+        tracks_dir     = os.path.join(res_dir, 'Tracks')
+    log:
+        os.path.join(log_dir, 'star/{sample}.log')
+    conda:
+        '/home/f.comoglio/gitlab/smk-pip/envs/star.yaml'
+    threads: 8
+    shell:
+        """
+        if [ {params.seq_type} == 'se' ]
+        then
+            nice -n 19 STAR --runThreadN {threads} --outFileNamePrefix {params.out_dir_prefix} --outSAMtype BAM SortedByCoordinate --genomeDir {params.star_index_dir} \
+            --quantMode TranscriptomeSAM GeneCounts --outWigType bedGraph --outWigNorm RPM {params.options} --readFilesIn {input.reads} --readFilesCommand zcat 2>{log}
+        else
+            nice -n 19 STAR --runThreadN {threads} --outFileNamePrefix {params.out_dir_prefix} --outSAMtype BAM SortedByCoordinate --genomeDir {params.star_index_dir} \
+            --quantMode TranscriptomeSAM GeneCounts --outWigType bedGraph --outWigNorm RPM {params.options} --readFilesIn {input.reads[0]} {input.reads[1]} --readFilesCommand zcat 2>{log}
+        fi
+
+        # remove tracks with unique+multimappers
+        rm '{params.out_dir_prefix}Signal.UniqueMultiple.str1.out.bg'
+
+        # move tracks with unique alignments to Tracks folder
+        mkdir -p {params.tracks_dir}
+        mv '{params.out_dir_prefix}Signal.Unique.str1.out.bg' {params.tracks_dir}
+
+        # convert to bigwig
+        # /home/f.comoglio/gitlab/smk-pip/bash/bdg_to_bw.sh '{params.tracks_dir}/{params.sample}_Signal.Unique.str1.out.bg' {params.chrom_sizes}
+        /home/t.v.schaik/mydata/proj/3D_nucleus/results/ts210514_RNAseq_Ki67_depletion/Federico_workflow/bdg_to_bw.sh '{params.tracks_dir}/{params.sample}_Signal.Unique.str1.out.bg' {params.chrom_sizes}
+        """

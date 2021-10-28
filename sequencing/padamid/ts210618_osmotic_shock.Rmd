@@ -1,0 +1,587 @@
+---
+title: "4DN DamID - Ki67 project - Osmotic shock"
+author: "Tom van Schaik"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output: 
+  html_document:
+    theme: journal #cerulean
+    highlight: monochrome
+    toc: true
+    toc_float: true
+    code_folding: show
+  editor_options:
+    chunk_output_type: console
+---
+
+### Project
+
+Mapping of Ki67 interactions with the genome and comparison with lamina 
+interactions.
+
+
+### Introduction
+
+Various analyses of RPE cells following osmotic shock.
+
+
+### Method
+
+NA
+
+
+### Set-up
+
+Set the parameters and list the data.
+
+```{r set-up, warning = F, message = F}
+
+# Load dependencies - without warnings / messages
+library(tidyverse)
+library(GenomicRanges)
+library(rtracklayer)
+library(ggplot2)
+library(RColorBrewer)
+library(GGally)
+library(corrr)
+library(caTools)
+library(ggbeeswarm)
+
+# Prepare output 
+output_dir <- "ts210618_osmotic_shock"
+dir.create(output_dir, showWarnings = FALSE)
+
+
+# Load input
+chromosomes <- c(paste0("chr", 1:22), "chrX")
+
+
+input_dir <- "ts210413_data_gathering"
+
+bin_size <- readRDS(file.path(input_dir, "bin_size.rds"))
+centromeres <- readRDS(file.path(input_dir, "centromeres.rds"))
+
+colors_set1 <- readRDS(file.path(input_dir, "colors_set1.rds"))
+colors_set2 <- readRDS(file.path(input_dir, "colors_set2.rds"))
+colors_set3 <- readRDS(file.path(input_dir, "colors_set3.rds"))
+
+tib_padamid_replicates <- readRDS(file.path(input_dir, 
+                                            "tib_padamid_replicates.rds"))
+tib_padamid_combined <- readRDS(file.path(input_dir, 
+                                          "tib_padamid_combined.rds"))
+
+gr_padamid_replicates <- readRDS(file.path(input_dir, 
+                                           "gr_padamid_replicates.rds"))
+gr_padamid_combined <- readRDS(file.path(input_dir, 
+                                         "gr_padamid_combined.rds"))
+
+tib_hmm_replicates <- readRDS(file.path(input_dir, "tib_hmm_replicates.rds"))
+tib_hmm_combined <- readRDS(file.path(input_dir, "tib_hmm_combined.rds"))
+
+padamid_metadata_replicates <- readRDS(file.path(input_dir, 
+                                                 "padamid_metadata_replicates.rds"))
+padamid_metadata_combined <- readRDS(file.path(input_dir, 
+                                               "padamid_metadata_combined.rds"))
+
+
+
+# Prepare seqnames
+chrom_sizes <- tibble(seqnames = seqlevels(gr_padamid_combined),
+                      length = seqlengths(gr_padamid_combined)) %>%
+  arrange(-length)
+
+
+# Scale pA-DamID scores?
+tib_padamid_combined <- tib_padamid_combined %>%
+  mutate_at(4:ncol(.), function(x) scale(x)[, 1])
+
+```
+
+```{r knits setup}
+library(knitr)
+opts_chunk$set(fig.width = 10, fig.height = 4, cache = T,
+               dev=c('png', 'pdf'), fig.path = file.path(output_dir, "figures/")) 
+pdf.options(useDingbats = FALSE)
+```
+
+```{r functions}
+
+# From Fede:
+# ggpairs custom functions
+corColor <- function(data, mapping, color = I("black"), sizeRange = c(1, 3), ...) {
+
+  x   <- eval_data_col(data, mapping$x)
+  y   <- eval_data_col(data, mapping$y)
+  r   <- cor(x, y)
+  rt  <- format(r, digits = 3)
+  tt  <- as.character(rt)
+  cex <- max(sizeRange)
+
+  # helper function to calculate a useable size
+  percent_of_range <- function(percent, range) {
+    percent * diff(range) + min(range, na.rm = TRUE)
+  }
+
+  # plot correlation coefficient
+  p <- ggally_text(label = tt, mapping = aes(), xP = 0.5, yP = 0.5,
+                   # size = I(percent_of_range(cex * abs(r), sizeRange)), 
+                   size = 6, 
+                   color = color, ...) +
+    theme(panel.grid.minor=element_blank(),
+          panel.grid.major=element_blank())
+
+  corColors <- RColorBrewer::brewer.pal(n = 7, name = "RdYlBu")[2:6]
+
+  if (r <= boundaries[1]) {
+    corCol <- corColors[1]
+  } else if (r <= boundaries[2]) {
+    corCol <- corColors[2]
+  } else if (r < boundaries[3]) {
+    corCol <- corColors[3]
+  } else if (r < boundaries[4]) {
+    corCol <- corColors[4]
+  } else {
+    corCol <- corColors[5]
+  }
+
+  p <- p +
+    theme(panel.background = element_rect(fill = corCol))
+
+  return(p)
+}
+
+customScatter <- function (data, mapping) 
+{
+    p <- ggplot(data = data, mapping) + 
+      geom_bin2d(bins = 100) +
+      geom_smooth(method = "lm", se = T, col = "red") +
+      scale_fill_gradient(low = "lightgrey", high = "black", name = "Count") +
+      theme_bw()
+    
+    p 
+}
+
+PlotScatter <- function(tib, n1, n2, color_by = NULL, identity = F,
+                        xlimits = NULL, facet_seqnames = F,
+                        smooth_line = F, smooth_seqnames = F) {
+  # Get tibble
+  tib <- tib %>%
+    dplyr::select(seqnames, matches(n1), matches(n2)) %>%
+    rename_all(~ c("seqnames", "n1", "n2")) %>%
+    mutate(seqnames = factor(seqnames, 
+                             levels = seqlevels(gr_padamid_combined)))
+  
+  # Prepare color
+  if (! is.null(color_by)) {
+    tib <- tib %>%
+      add_column(color = color_by) %>%
+      drop_na()
+    alpha = 1
+    limits_color <- quantile(tib$color, c(0.001, 0.999), na.rm = T)
+    tib$color[tib$color < limits_color[1]] <- limits_color[1]
+    tib$color[tib$color > limits_color[2]] <- limits_color[2]
+  } else {
+    tib <- tib %>% drop_na()
+    tib$color = "1"
+    alpha = 0.02
+  }
+  
+  # Plot
+  if (is.null(xlimits)) {
+    xlimits <- quantile(tib$n1, c(0.001, 0.999), na.rm = T) * 1.4 
+  }
+  ylimits <- quantile(tib$n2, c(0.001, 0.999), na.rm = T) * 1.4
+  
+  plt <- tib %>%
+    arrange(sample(1:nrow(.), size = nrow(.), replace = F)) %>%
+    ggplot(aes(x = n1, y = n2, color = color)) +
+    geom_point(size = 0.5, alpha = alpha) +
+    geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+    geom_vline(xintercept = 0, col = "black", linetype = "dashed") +
+    xlab(n1) +
+    ylab(n2) +
+    ggtitle(paste0("Spearman: ", 
+                   round(cor(tib$n1, tib$n2, use = "complete.obs",
+                             method = "spearman"), 2))) +
+    coord_cartesian(xlim = xlimits, ylim = ylimits) +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+  
+  # Prepare color
+  if (! is.null(color_by)) {
+    plt <- plt +
+      scale_color_gradient2(low = "blue", mid = "grey", high = "red",
+                            midpoint = 0)
+  } else {
+    plt <- plt + 
+      scale_color_manual(values = "black", guide = F)
+  }
+  if (identity) plt <- plt + geom_abline(slope = 1, intercept = 0, col = "red", linetype = "dashed")
+  
+  # Facets / smooth
+  if (facet_seqnames) plt <- plt + facet_wrap(~ seqnames)
+  if (smooth_line) plt <- plt + geom_smooth(method = "loess", span = 0.7, se = F, col = "black")
+  if (smooth_seqnames) plt <- plt + geom_smooth(aes(group = seqnames), 
+                                                alpha = 0.2, col = "black",
+                                                method = "loess", span = 0.7, se = F)
+  
+  plot(plt)
+  
+}
+
+PlotScatterBinned <- function(tib, n1, n2, color_by = NULL, identity = F, 
+                              n_min = 10, ylimits_col = c(-2.4, 2.4),
+                              count_range = c(0, 400)) {
+  # Get tibble
+  tib_process <- tib %>%
+    dplyr::select(seqnames, all_of(n1), all_of(n2)) %>%
+    rename_all(~ c("seqnames", "n1", "n2"))
+  
+  if (! is.null(color_by)) {
+    tib_process <- tib_process %>%
+      add_column(color = color_by)
+  }
+  
+  tib_process <- tib_process %>%
+    drop_na()
+  
+  # Change color range
+  if (! is.null(color_by)) {
+    limits_color <- quantile(tib_process$color, c(0.001, 0.999), na.rm = T)
+    tib_process$color[tib_process$color < limits_color[1]] <- limits_color[1]
+    tib_process$color[tib_process$color > limits_color[2]] <- limits_color[2]
+  }
+  
+  # Metrics
+  n1_min = min(tib_process$n1) - 0.001
+  n1_max = max(tib_process$n1) + 0.001
+  n1_binsize <- (n1_max - n1_min) / 49
+  
+  n2_min = min(tib_process$n2) - 0.001
+  n2_max = max(tib_process$n2) + 0.001
+  n2_binsize <- (n2_max - n2_min) / 49
+  
+  tib_summary <- tib_process %>%
+    mutate(n1_cut = cut(n1, 
+                        seq(n1_min, n1_max, length.out = 50)),
+           n2_cut = cut(n2, 
+                        seq(n2_min, n2_max, length.out = 50))) %>%
+    mutate(n1_bin = as.numeric(as.factor(n1_cut)),
+           n2_bin = as.numeric(as.factor(n2_cut))) %>%
+    mutate(n1_bin = n1_min - n1_binsize/2 + n1_bin * n1_binsize,
+           n2_bin = n2_min - n2_binsize/2 + n2_bin * n2_binsize) %>%
+    group_by(n1_bin, n2_bin)
+  
+  # Plot
+  if (! is.null(color_by)) {
+    tib_summary <- tib_summary %>%
+    dplyr::summarise(n = n(),
+                     mark = mean(color)) %>%
+    ungroup() %>%
+    filter(n >= n_min)
+    
+    plt <- tib_summary %>%
+      ggplot(aes(x = n1_bin, y = n2_bin)) +
+      geom_tile(aes(fill = mark)) +
+      scale_fill_gradient2(low = "blue", mid = "grey", high = "red",
+                           midpoint = 0, limits = ylimits_col, 
+                           na.value = "green")
+  } else {
+    tib_summary <- tib_summary %>%
+    dplyr::summarise(n = n()) %>%
+    ungroup() %>%
+    filter(n >= n_min)
+    
+    plt <- tib_summary %>%
+      ggplot(aes(x = n1_bin, y = n2_bin)) +
+      geom_tile(aes(fill = n)) +
+      scale_fill_gradient(low = "lightgrey", high = "black", name = "Count",
+                          limits = count_range, na.value = "green")
+  }
+  
+  plt <- plt + 
+    geom_hline(yintercept = 0, linetype = "dashed", col = "black") +
+    geom_vline(xintercept = 0, linetype = "dashed", col = "black") +
+    xlab(n1) +
+    ylab(n2) +
+    ggtitle(paste0("Pearson: ", 
+                   round(cor(tib_process$n1, tib_process$n2, use = "complete.obs",
+                             method = "pearson"), 2))) +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+  
+  if (identity) plt <- plt + geom_abline(slope = 1, intercept = 0, 
+                                         col = "black", linetype = "dashed")
+  
+  plot(plt)
+  
+}
+
+quantiles <- function(x) {
+  # Use quantiles as boxplot boundaries
+  r <- quantile(x, probs = c(0.05, 0.25, 0.5, 0.75, 0.95))
+  names(r) <- c("ymin", "lower", "middle", "upper", "ymax")
+  r
+}
+
+
+
+```
+
+
+### 1. Comparison with cell cycle interactions
+
+Is a simple scatter plot convincing?
+
+```{r cell cycle comparison, fig.width = 5, fig.height = 3.5}
+
+# Are the differences the same?
+tib <- tib_padamid_combined %>%
+  mutate(diff_cell_cycle = RPE_10h_Ki67 - RPE_1h_Ki67,
+         diff_osmotic_shock = RPE_Osm_180m_Ki67 - RPE_Osm_30m_Ki67) %>%
+  filter(seqnames != "chrY")
+
+PlotScatterBinned(tib, 
+                  n1 = "diff_cell_cycle", 
+                  n2 = "diff_osmotic_shock")
+
+```
+
+Simple scatter plots do not work - too noisy data I'm afraid.
+
+How about chromosomal differences?
+
+```{r chromosomal differences, fig.width = 6, fig.height = 3.5}
+
+# Boxplots 
+tib %>%
+  gather(key, value, contains("diff")) %>%
+  mutate(seqnames = factor(seqnames, chrom_sizes$seqnames)) %>%
+  ggplot(aes(x = seqnames, y = value, fill = key)) +
+  geom_hline(yintercept = 0, linetype = "dashed", col = "blue") +
+  #geom_boxplot(outlier.shape = NA) +
+  stat_summary(fun.data = quantiles, geom = "boxplot") +
+  coord_cartesian(ylim = c(-1.1, 1.1)) +
+  scale_fill_brewer(palette = "Set1") +
+  theme_bw() +
+  theme(aspect.ratio = 2/3,
+        axis.text.x = element_text(angle = 90, hjust = 1))
+
+# Scatter plot
+tib %>%
+  mutate(seqnames = factor(seqnames, chrom_sizes$seqnames)) %>%
+  group_by(seqnames) %>%
+  dplyr::summarise(cell_cycle = mean(diff_cell_cycle, na.rm = T),
+                   osmotic_shock = mean(diff_osmotic_shock, na.rm = T)) %>%
+  ungroup() %>%
+  ggplot(aes(x = cell_cycle, y = osmotic_shock)) +
+  geom_hline(yintercept = 0, linetype = "dashed", col = "black") +
+  geom_vline(xintercept = 0, linetype = "dashed", col = "black") +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  geom_text(aes(label = str_remove(seqnames, "chr"), y = osmotic_shock + 0.02)) +
+  theme_bw() +
+  theme(aspect.ratio = 1,
+        axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+```
+
+
+### 2. Compare with DamID
+
+In contrast to the title of the document, I will also compare the cell cycle
+data with the nucleolus data briefly. 
+
+```{r load damid}
+
+# List files
+filter_samples_damid <- paste(c("H1", "Hap1", "CENPB", "U2OS", "IMR90"),
+                              collapse = "|")
+
+damid_files <- dir("../ts180110_4DN_DataProcessing/results/tracks/normalized/bin-50kb/", 
+                     recursive = T, full.names = T, pattern = "combined")
+damid_files <- grep(filter_samples_damid, damid_files, value = T, invert = T)
+
+
+# Prepare into metadata
+damid_metadata <- tibble(file = damid_files) %>%
+  mutate(sample = str_remove(basename(file), "\\..*"),
+         sample = str_remove(sample, "-.*")) %>%
+  mutate(cell = str_remove(sample, "_.*"),
+         target = str_remove(sample, ".*_"),
+         replicate = NA,
+         combined = T,
+         experiment = "wildtype") %>%
+  # Add factor levels
+  mutate(cell = factor(cell, c("RPE", "HCT116", "K562", "HFF")),
+         experiment = factor(experiment, c("wildtype")),
+         target = factor(target, c("LMNB1", "4xAP3")),
+         replicate = factor(replicate, c("r1", "r2", "r3", "r4", "r5")),
+         condition = "wt")
+
+# Load bigwig files - combine into one tibble
+tmp <- tib_padamid_combined %>%
+  filter(seqnames != "chrY")
+
+for (i in 1:nrow(damid_metadata)) {
+  # File name
+  f_name <- damid_metadata$sample[i]
+  # Read file
+  f_tib <- as_tibble(import(damid_metadata$file[i])) %>%
+    dplyr::select(-width, -strand) %>%
+    dplyr::rename_at(4, ~f_name) %>%
+    mutate(seqnames = as.character(seqnames))
+  # Add to tibble
+  tmp <- full_join(tmp, f_tib)
+}
+
+
+# Rename scores
+tib <- tib_damid_combined <- tmp
+gr_damid_combined <- as(tib_damid_combined, "GRanges")
+
+```
+
+```{r damid versus ki67, fig.width = 5, fig.height = 3.5}
+
+# Scatter plots
+PlotScatterBinned(tib, 
+                  n1 = "RPE_wt_Ki67", n2 = "RPE_4xAP3",
+                  count_range = c(0, 580))
+
+PlotScatterBinned(tib, 
+                  n1 = "HCT116_wt_Ki67", n2 = "HCT116_4xAP3",
+                  count_range = c(0, 580))
+
+PlotScatterBinned(tib, 
+                  n1 = "K562_wt_Ki67", n2 = "K562_4xAP3",
+                  count_range = c(0, 580))
+
+# # Can I show that "intermediate" Ki67 scores have generally high 4xAP3 scores?
+# tib %>% 
+#   dplyr::select(seqnames, RPE_wt_Ki67, RPE_4xAP3) %>%
+#   drop_na() %>%
+#   rename_at(2:3, ~ c("Ki67", "damid_4xAP3")) %>%
+#   arrange(Ki67) %>%
+#   mutate(ki67_decile = cut(seq_along(Ki67), 
+#                            breaks = seq(from = 0, to = nrow(.),
+#                                         length.out = 11)),
+#          ki67_decile = as.factor(as.numeric(ki67_decile))) %>%
+#   ggplot(aes(x = ki67_decile, y = damid_4xAP3)) +
+#   geom_boxplot(outlier.shape = NA) +
+#   theme_bw() +
+#   theme(aspect.ratio = 1)
+
+```
+
+```{r damid versus cell cycle ki67, fig.width = 5, fig.height = 3.5}
+
+# Scatter plots - colored
+PlotScatter(tib, 
+            n1 = "RPE_1h_Ki67", n2 = "RPE_6h_Ki67",
+            color_by = tib$RPE_4xAP3,
+            identity = T)
+
+PlotScatterBinned(tib, 
+                  n1 = "RPE_1h_Ki67", n2 = "RPE_6h_Ki67",
+                  color_by = tib$RPE_4xAP3, ylimits_col = c(-0.7, 0.7),
+                  identity = T)
+
+
+# Difference versus 4xAP3
+PlotScatterBinned(tib %>%
+                    mutate(diff = RPE_1h_Ki67 - RPE_6h_Ki67), 
+                  n1 = "diff", n2 = "RPE_4xAP3")
+
+
+# Correlation with time points
+tib_cor <- tib %>%
+  drop_na() %>%
+  gather(key, value, matches("RPE_.*h_Ki67")) %>%
+  filter(! key %in% c("RPE_0h_Ki67", "RPE_21h_Ki67")) %>%
+  group_by(key, seqnames) %>%
+  dplyr::summarise(cor = cor(value, RPE_4xAP3, method = "pearson")) %>%
+  mutate(seqnames = factor(seqnames, chrom_sizes$seqnames),
+         key = factor(key, padamid_metadata_combined$sample))
+
+tib_cor %>%
+  ggplot(aes(x = seqnames, y = cor, col = key)) +
+  geom_point() +
+  geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+  scale_color_manual(values = brewer.pal("Spectral", n = 4)) +
+  theme_bw() +
+  theme(aspect.ratio = 1,
+        axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+
+### 3. Osmotic shock versus cell cycle time points
+
+Request from Bas: show that t=30m is more like early interphase and t=180m is
+more like late interphase. 
+
+```{r correlate time points, fig.width = 5, fig.height = 3.5}
+
+# Pearson correlation of osmotic shock time points with cell cycle time
+# points.
+tib_padamid_combined %>%
+  dplyr::select(matches("RPE_.*h_Ki67"),
+                matches("Osm_.*_Ki67"),
+                -matches("_0"),
+                -matches("_21h_")) %>%
+  drop_na() %>%
+  # Correlate everything
+  correlate(method = "pearson", diagonal = 1, quiet = T) %>%
+  # Get osm vs cell cycle correlations
+  gather(key, value, -term) %>%
+  filter(grepl("Osm", term) &
+           ! grepl("Osm", key)) %>%
+  mutate(term = str_remove(term, "_Ki67"),
+         term = str_replace(term, ".*_", "t_"),
+         term = factor(term, levels = unique(term)),
+         key = str_remove(key, "_Ki67"),
+         key = str_replace(key, ".*_", "t_"),
+         key = factor(key, levels = unique(key))) %>%
+  ggplot(aes(x = key, y = value, col = term)) +
+  geom_point() +
+  xlab("Cell cycle time point") +
+  ylab("Pearson correlation") +
+  scale_color_brewer(palette = "Set1") +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+```
+
+As I tried to point out to Bas, there seems to be more going on after the
+osmotic shock than a repeat of early G1 -> late G1. This is not strange, as
+these cells are in completely different cell cycle stages and no longer have 
+the same transitions. For me, the main thing to observe is that PNBs form 
+also at other chromosomes, and that result I can clearly quantify. This figure
+shows that the osmotic shock is more like ~3h and ~6h than any other time point.
+Important to note is that ~10h is simply of lower quality for some unknown 
+reason. 
+
+Regardless, the trend is there: 30m osmotic shock is more like ~1h than 180m 
+osmotic shock, and vice-versa for ~10h.
+
+
+### Conclusions
+
+-
+
+
+### Session info
+
+```{r save data}
+
+# Save rds objects
+saveRDS(tib_damid_combined, file.path(output_dir,
+                                      "tib_damid_combined.rds"))
+
+```
+
+```{r session info}
+sessionInfo()
+```
+

@@ -1,0 +1,217 @@
+---
+title: "4DN DamID - Ki67 project - Replication timing at centromeres"
+author: "Tom van Schaik"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output: 
+  html_document:
+    theme: journal #cerulean
+    highlight: monochrome
+    toc: true
+    toc_float: true
+    code_folding: show
+  editor_options:
+    chunk_output_type: console
+---
+
+### Project
+
+Mapping of Ki67 interactions with the genome and comparison with lamina 
+interactions.
+
+
+### Introduction
+
+I previously observed that sequences near centromeres are replicating later
+upon depletion of Ki67. In this document, I will load all the reads 
+irrespective of their mapping quality, and determine the fraction that falls
+within centromeres. The reasoning here is that these reads might map to a 
+different location within centromeres, but should give me a good proxy of 
+the "centromere replication timing" with and without Ki67.
+
+
+### Method
+
+Load the bam files without mapping quality criteria. Overlap with entire
+centromere models.
+
+
+### Set-up
+
+Set the parameters and list the data.
+
+```{r set-up, warning = F, message = F, cache = T}
+
+# Load dependencies - without warnings / messages
+library(tidyverse)
+library(GenomicRanges)
+library(rtracklayer)
+library(ggplot2)
+library(GenomicAlignments) # to read bam files
+
+# Prepare output 
+output_dir <- "ts210802_centromere_overlap"
+dir.create(output_dir, showWarnings = FALSE)
+
+# Load input
+chromosomes <- c(paste0("chr", 1:22), "chrX")
+
+# Prepare seqnames
+chrom_sizes <- read_tsv("~/mydata/data/genomes/GRCh38/hg38.chrom.sizes",
+                        col_names = c("seqnames", "length"))
+
+# Centromeres
+centromeres <- readRDS("../ts200921_LaminaNucleolus_AdditionalExperiments/ts210413_data_gathering/centromeres.rds")
+
+# From previous workflow
+input_dir <- "ts210802_further_processing_replication_timing"
+metadata <- readRDS(file.path(input_dir, "tib_repliseq_metadata.rds"))
+
+```
+
+```{r knits setup}
+library(knitr)
+opts_chunk$set(fig.width = 5, fig.height = 3.5, cache = T,
+               dev=c('png', 'pdf'), 
+               fig.path = file.path(output_dir, "figures/")) 
+pdf.options(useDingbats = FALSE)
+```
+
+```{r functions}
+
+# Functions
+bam_reader <- function(bam, mapqual, multimap, dup, alignscore) {
+    # Read alignments from a bam-file, applying given filters on it.
+    param <- get_param(mapqual, dup)
+    reads <- readGAlignments(bam, param = param)
+    
+    if (multimap) {
+        # Bowtie-specific! - the XS-flag is only present when multiple 
+        # alignments are present
+        reads <- reads[is.na(mcols(reads)$XS)]
+    } 
+    if (! is.na(alignscore)) {
+        # Bowtie-specific? - the AS shows how good the mapping is
+        reads <- reads[mcols(reads)$AS >= alignscore]
+    }
+    
+    # Convert to GRanges
+    reads <- as(reads, "GRanges")
+    reads
+}
+get_param <- function(mapqual, dup) {
+    # Get the parameter options for reading alignments
+    flags <- scanBamFlag(isUnmappedQuery = FALSE,
+                         isDuplicate = dup)
+    param <- ScanBamParam(flag = flags, 
+                          tag = c("XS", "AS"),
+                          mapqFilter = mapqual)
+    param
+}
+
+# Parameters to read in mapped reads, regardless of unique position
+mapqual = NA
+alignscore = -3
+multimap = FALSE
+dup = NA
+
+```
+
+
+### 1. List files and load reads
+
+```{r load reads}
+
+# First, list the files
+metadata <- metadata %>%
+  mutate(bam = paste0(paste0("ts210802_repliseq/mapping/", sample, ".bam")))
+
+# Then, load the reads
+reads <- list()
+for (n in metadata$bam) {
+  reads <- c(reads, bam_reader(n, mapqual, multimap, dup, alignscore))
+}
+
+# Calculate read numbers
+total_reads <- sapply(reads, length)
+centromere_reads <- sapply(reads, function(x) sum(x %over% centromeres))
+
+
+# Intermediate clean-up - remove reads
+rm(reads)
+
+```
+
+
+### 2. Calculate centromere enrichment
+
+```{r calculate centromere enrichment}
+
+# Calculate read numbers - combine in tibble
+tib_centromere <- tibble(sample = metadata$sample,
+                         total_reads = total_reads,
+                         centromere_reads = centromere_reads)
+tib_centromere <- full_join(metadata, tib_centromere)
+
+
+# Combine lanes
+tib_centromere_lanes <- tib_centromere %>%
+  group_by(fraction, iaa, rep, experiment, experiment_fraction) %>%
+  dplyr::summarise(total_reads = sum(total_reads),
+                   centromere_reads = sum(centromere_reads)) %>%
+  ungroup()
+
+# Calculate fractions
+tib_centromere_lanes <- tib_centromere_lanes %>%
+  mutate(centromere_fraction = centromere_reads / total_reads)
+tib_centromere_lanes
+
+# Calculate enrichments
+tib_centromere_enrichment <- tib_centromere_lanes %>%
+  dplyr::select(fraction, iaa, rep, centromere_fraction) %>%
+  spread(fraction, centromere_fraction) %>%
+  mutate(ratio = log2(early / late)) %>%
+  mutate(iaa = factor(iaa, levels = c("no_iaa", "iaa")))
+tib_centromere_enrichment
+
+```
+
+
+### 3. Plots
+
+Finally, plot these values.
+
+```{r plot replication of centromeres}
+
+# Use ggplot
+tib_centromere_enrichment %>%
+  ggplot(aes(x = iaa, y = ratio, fill = rep)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  geom_hline(yintercept = 0, col = "black") +
+  xlab("") +
+  ylab("Repli-seq at centromeres (log2)") +
+  scale_fill_grey() +
+  theme_bw() +
+  theme(aspect.ratio = 1.5)
+
+```
+
+
+### Conclusions
+
+This supports the conclusion that centromeres have delayed replication timing
+after Ki67 depletion. I like it.
+
+
+### Session info
+
+```{r save data}
+
+# Save RDS files of the ranges
+
+
+```
+
+```{r session info}
+sessionInfo()
+```
+

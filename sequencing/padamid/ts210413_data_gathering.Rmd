@@ -1,0 +1,1955 @@
+---
+title: "4DN DamID - Ki67 project - Data gathering"
+author: "Tom van Schaik"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output: 
+  html_document:
+    theme: journal #cerulean
+    highlight: monochrome
+    toc: true
+    toc_float: true
+    code_folding: show
+  editor_options:
+    chunk_output_type: console
+---
+
+### Project
+
+Mapping of Ki67 interactions with the genome and comparison with lamina 
+interactions.
+
+
+### Introduction
+
+Load the data tracks and save them as .rds file for later documents.
+
+
+### Method
+
+NA
+
+
+### Set-up
+
+Set the parameters and list the data.
+
+```{r set-up, warning = F, message = F}
+
+# Load dependencies - without warnings / messages
+library(tidyverse)
+library(GenomicRanges)
+library(rtracklayer)
+library(ggplot2)
+library(RColorBrewer)
+library(caTools)
+library(ggbeeswarm)
+
+# Prepare output 
+output_dir <- "ts210413_data_gathering"
+dir.create(output_dir, showWarnings = FALSE)
+
+# Input parameters
+bin_size <- "50kb"
+filter_samples <- paste(c("EpiInh", "IMR", "HFF", "wtDam"),
+                        collapse = "|")
+
+# Load input
+input_dir <- "../ts191220_laminaVsNucleolus_NewAnalyses/ts200107_HMMOverlap"
+centromeres <- readRDS(file.path(input_dir, "centromeres.rds"))
+
+```
+
+```{r knits setup}
+library(knitr)
+opts_chunk$set(fig.width = 10, fig.height = 4, cache = T,
+               dev=c('png', 'pdf'), fig.path = file.path(output_dir, "figures/")) 
+pdf.options(useDingbats = FALSE)
+```
+
+```{r functions}
+
+# Prepare color lists
+colors_set1 <- RColorBrewer::brewer.pal(name = "Set1", n = 9)
+colors_set2 <- RColorBrewer::brewer.pal(name = "Set2", n = 8)
+colors_set3 <- RColorBrewer::brewer.pal(name = "Dark2", n = 8)
+
+colors_cells <- c(RPE = colors_set1[1],
+                  HCT116 = colors_set1[2],
+                  K562 = colors_set1[3])
+colors_targets <- c(H3K27me3 = colors_set2[1],
+                    LMNB1 = colors_set2[2],
+                    Ki67 = colors_set2[3],
+                    H3K9me3 = colors_set2[4])
+#colors_conditions <- list()
+
+quantiles <- function(x) {
+  # Use quantiles as boxplot boundaries
+  r <- quantile(x, probs = c(0.05, 0.25, 0.5, 0.75, 0.95))
+  names(r) <- c("ymin", "lower", "middle", "upper", "ymax")
+  r
+}
+
+PlotDataTracks <- function(input_tib, exp_names, metadata, centromeres, 
+                           tib_hmm_mean = NULL, 
+                           plot_chr = "chr1", 
+                           plot_start = 1, plot_end = 500e6,
+                           smooth = 1, fill_column = "cell", 
+                           color_list = NULL,
+                           remove_samples = "xxxxx",
+                           fix_yaxis = F, counts = F) {
+  
+  # Get the scores for the samples
+  tib <- input_tib %>%
+    dplyr::select(seqnames, start, end, 
+                  matches(exp_names))
+  
+  if (smooth > 1) {
+    tib <- tib %>%
+      mutate_at(vars(contains("_")), 
+                runmean, k = smooth)
+  }
+  
+  # Filter for plotting window
+  tib <- tib %>%
+    filter(seqnames == plot_chr,
+           start >= plot_start,
+           end <= plot_end)
+  
+  # Gather
+  tib_gather <- tib %>%
+    gather(key, value, -seqnames, -start, -end) %>%
+    filter(! grepl(remove_samples, key)) %>%
+    mutate(match = match(key, metadata$sample),
+           cell = metadata$cell[match],
+           experiment = metadata$experiment[match],
+           condition = metadata$condition[match],
+           target = metadata$target[match],
+           key = factor(key, levels = unique(metadata$sample)))
+  tib_gather$fill_column <- tib_gather %>% pull(fill_column)
+  
+  if (fill_column == "condition") {
+    tib_gather$fill_column <- droplevels(tib_gather$fill_column)
+  }
+  
+  # Prepare object with regions
+  if (! is.null(tib_hmm_mean)) {
+    tib_regions <- tib_hmm_mean %>%
+      gather(key, value, -seqnames, -start, -end) %>%
+      filter(key %in% unique(tib_gather$key),
+             seqnames == plot_chr,
+             start >= plot_start - 1e7,
+             end <= plot_end + 1e7,
+             value == "AD") %>%
+      mutate(match = match(key, metadata$sample),
+           cell = metadata$cell[match],
+           experiment = metadata$experiment[match],
+           condition = metadata$condition[match],
+           target = metadata$target[match],
+           key = factor(key, levels(tib_gather$key)))
+  }
+  
+  # Centromeres
+  centromeres.plt <- as_tibble(centromeres) %>%
+    filter(seqnames == plot_chr) %>%
+    gather(key_centromeres, value, start, end)
+  
+  # Plot
+  ylimits <- quantile(tib_gather$value, c(0.001, 0.999), na.rm = T)
+  fill_column <- NA   # If I don't do this, it will add it as fill variable
+  
+  plt <- tib_gather %>% 
+    ggplot(aes(fill = fill_column))
+  
+  if (! is.null(tib_hmm_mean)) {
+    plt <- plt + 
+      geom_rect(data = tib_regions,
+                aes(xmin = start / 1e6, xmax = end / 1e6, 
+                    group = key), 
+                fill = "lightgrey", 
+                ymin = -5, ymax = 5, alpha = 1)
+  }
+  
+  # Set all counts tracks to the same limits
+  if (counts) {
+    counts_samples <- grep("counts", unique(tib_gather$key), value = T)
+    counts_limit <- tib_gather %>%
+      filter(key %in% counts_samples) %>%
+      pull(value) %>%
+      max()
+    counts_df <- data.frame(key = factor(counts_samples,
+                                         levels(tib_gather$key)),
+                            #value = counts_limit)
+                            value = 50)
+    norm_df <- data.frame(key = factor(grep("counts", unique(tib_gather$key), 
+                                            value = T, invert = T),
+                                       levels(tib_gather$key)),
+                          ymin = -1.2, ymax = 1.2)
+    plt <- plt +
+      geom_rect(data = counts_df, aes(xmin = plot_start, xmax = plot_start + 1, 
+                                      ymin = 0, ymax = value), fill = NA, col = NA) +
+      geom_rect(data = norm_df, aes(xmin = plot_start, xmax = plot_start + 1, 
+                                    ymin = ymin, ymax = ymax), 
+                fill = NA, col = NA)
+  }
+  
+  plt <- plt + 
+    geom_rect(aes(xmin = start / 1e6, xmax = end / 1e6, 
+                  ymin = 0, ymax = value)) +
+    geom_line(data = centromeres.plt, 
+              aes(x = value / 1e6, y = 0),
+              color = "black", size = 2) +
+    geom_hline(yintercept = 0, size = 0.5) +
+    facet_grid(key ~ ., scales = "free_y") +
+    xlab(paste0(plot_chr, " (Mb)")) +
+    ylab("Score") +
+    scale_x_continuous(expand = c(0, 0)) + 
+    scale_y_continuous(expand = c(0.025, 0.025)) +
+    theme_classic()
+  
+  if (! is.null(color_list)) {
+    colors <- levels(tib_gather$fill_column)
+
+    color_list <- color_list[1:length(colors)]
+    names(color_list) <- colors
+    #colors <- recode(colors, !!!color_list)
+    
+    plt <- plt +
+      scale_fill_manual(values = color_list, guide = F)
+  } else {
+    plt <- plt +
+      scale_fill_brewer(palette = "Set1", guide = F)
+  }
+  
+  if (fix_yaxis) {
+    plt <- plt + 
+      coord_cartesian(xlim = c(max(c(plot_start,
+                                   min(tib_gather$start))) / 1e6,
+                             min(c(plot_end,
+                                   max(tib_gather$end))) / 1e6),
+                    ylim = ylimits)
+  } else {
+    plt <- plt + 
+      coord_cartesian(xlim = c(max(c(plot_start,
+                                   min(tib_gather$start))) / 1e6,
+                             min(c(plot_end,
+                                   max(tib_gather$end))) / 1e6))
+  }
+  
+  plot(plt)
+  
+}
+
+PlotScatter <- function(gr, n1, n2, color_by = NULL, identity = F) {
+  # Get tibble
+  tib <- as_tibble(gr) %>%
+    dplyr::select(seqnames, matches(n1), matches(n2)) %>%
+    rename_all(~ c("seqnames", "n1", "n2"))
+  
+  # Prepare color
+  if (! is.null(color_by)) {
+    tib <- tib %>%
+      add_column(color = color_by) %>%
+      drop_na()
+    alpha = 1
+    limits_color <- quantile(tib$color, c(0.001, 0.999), na.rm = T)
+    tib$color[tib$color < limits_color[1]] <- limits_color[1]
+    tib$color[tib$color > limits_color[2]] <- limits_color[2]
+  } else {
+    tib <- tib %>% drop_na()
+    tib$color = "1"
+    alpha = 0.02
+  }
+  
+  # Plot
+  plt <- tib %>%
+    arrange(sample(1:nrow(.), size = nrow(.), replace = F)) %>%
+    ggplot(aes(x = n1, y = n2, color = color)) +
+    geom_point(alpha = alpha) +
+    xlab(n1) +
+    ylab(n2) +
+    ggtitle(paste0("Spearman: ", 
+                   round(cor(tib$n1, tib$n2, use = "complete.obs",
+                             method = "spearman"), 2))) +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+  
+  # Prepare color
+  if (! is.null(color_by)) {
+    plt <- plt +
+      scale_color_gradient2(low = "blue", mid = "grey", high = "red",
+                            midpoint = 0)
+  } else {
+    plt <- plt + 
+      scale_color_manual(values = "black", guide = F)
+  }
+  if (identity) plt <- plt + geom_abline(slope = 1, intercept = 0, col = "red", linetype = "dashed")
+  
+  plot(plt)
+  
+}
+
+```
+
+
+### 1. Load pA-DamID data
+
+```{r prepare padamid metadata}
+
+# List files
+padamid_files <- dir("results/tracks/normalized/bin-50kb/", 
+                     recursive = T, full.names = T)
+padamid_files <- grep(filter_samples, padamid_files, value = T, invert = T)
+
+
+# Prepare into metadata
+padamid_metadata <- tibble(file = padamid_files) %>%
+  mutate(sample = str_remove(basename(file), "\\..*"),
+         sample = str_remove(sample, "-.*")) %>%
+  mutate(cell = str_remove(sample, "_.*"),
+         target = str_remove(sample, ".*_"),
+         replicate = str_remove_all(str_extract(sample, 
+                                                "_r[0-9x]+_"), 
+                                    "_"),
+         combined = grepl("combined", file),
+         experiment = case_when(str_detect(sample, "wt") ~ "wildtype",
+                                str_detect(sample, "ActD") ~ "actinomycin",
+                                str_detect(sample, "AID") ~ "Ki67_aid",
+                                str_detect(sample, "SC|Ki67KD") ~ "Ki67_knockdown",
+                                str_detect(sample, "[0-9]+h") ~ "cell_cycle",
+                                str_detect(sample, "Osm") ~ "osmotic_shock",
+                                str_detect(sample, "H3K27me3inh") ~
+                                  "H3K27me3_inhibition",
+                                str_detect(sample, "noco_timeseries") ~
+                                  "noco_time_series",
+                                T ~ NA_character_)) %>%
+  # Remove some targets
+  filter(! target %in% c("MKI67IP", "NCL", "pADam")) %>%
+  # Add factor levels
+  mutate(cell = factor(cell, c("RPE", "HCT116", "K562")),
+         experiment = factor(experiment, c("wildtype", "cell_cycle", 
+                                           "actinomycin", "Ki67_aid",
+                                           "osmotic_shock", "Ki67_knockdown",
+                                           "H3K27me3_inhibition", 
+                                           "noco_time_series")),
+         target = factor(target, c("Ki67", "LMNB1", "H3K27me3", "H3K9me3",
+                                   "Ki67HPA", "Ki67NOV")),
+         replicate = factor(replicate, c(paste0("r", 1:10), 
+                                         paste0("rx", 1:5))))
+
+
+# Add condition information. This requires some additional manual work.
+condition <- rep(NA, nrow(padamid_metadata))
+
+# 1) wildtype
+condition[padamid_metadata$experiment == "wildtype"] <- "wt"
+
+# 2) actinomycin
+condition[str_detect(padamid_metadata$sample, "DMSO")] <- "DMSO"
+condition[str_detect(padamid_metadata$sample, "50ng")] <- "50ng"
+
+# 3) Ki67_aid
+condition[str_detect(padamid_metadata$sample, "AID_ctrl")] <- "control"
+condition[str_detect(padamid_metadata$sample, "AID_ctrl_IAA")] <- "control_IAA"
+condition[str_detect(padamid_metadata$sample, "AID_thy")] <- "thymidine"
+condition[str_detect(padamid_metadata$sample, "AID_thy_IAA")] <- "thymidine_IAA"
+condition[str_detect(padamid_metadata$sample, "AID_doublethy")] <- "doublethy"
+condition[str_detect(padamid_metadata$sample, "AID_doublethy_IAA")] <- "doublethy_IAA"
+condition[str_detect(padamid_metadata$sample, "AID_RO")] <- "RO"
+condition[str_detect(padamid_metadata$sample, "AID_RO_IAA")] <- "RO_IAA"
+
+# 4) Ki67_knockdown
+condition[str_detect(padamid_metadata$sample, "SC")] <- "siRNA_scramble"
+condition[str_detect(padamid_metadata$sample, "Ki67KD")] <- "siRNA_Ki67"
+
+# 5) cell_cycle
+condition[str_detect(padamid_metadata$sample, "_0h_")] <- "t_0h"
+condition[str_detect(padamid_metadata$sample, "_1h_")] <- "t_1h"
+condition[str_detect(padamid_metadata$sample, "_3h_")] <- "t_3h"
+condition[str_detect(padamid_metadata$sample, "_6h_")] <- "t_6h"
+condition[str_detect(padamid_metadata$sample, "_10h_")] <- "t_10h"
+condition[str_detect(padamid_metadata$sample, "_21h_")] <- "t_21h"
+
+# 6) cell_cycle
+condition[str_detect(padamid_metadata$sample, "_0m_")] <- "t_0m"
+condition[str_detect(padamid_metadata$sample, "_30m_")] <- "t_30m"
+condition[str_detect(padamid_metadata$sample, "_180m_")] <- "t_180m"
+
+# 7) H3K27me3 inhibition
+condition[str_detect(padamid_metadata$sample, "H3K27me3inh_DMSO")] <- "DMSO"
+condition[str_detect(padamid_metadata$sample, "H3K27me3inh_GSK126")] <- "GSK126"
+condition[str_detect(padamid_metadata$sample, "H3K27me3inh_EED226")] <- "EED226"
+condition[str_detect(padamid_metadata$sample, "mit_DMSO")] <- "DMSO_mit"
+condition[str_detect(padamid_metadata$sample, "mit_GSK126")] <- "GSK126_mit"
+condition[str_detect(padamid_metadata$sample, "mit_EED226")] <- "EED226_mit"
+
+# 7) Nocodazole time series
+condition[str_detect(padamid_metadata$sample, "noco_timeseries_30_")] <- "t_30m"
+condition[str_detect(padamid_metadata$sample, "noco_timeseries_60_")] <- "t_60m"
+condition[str_detect(padamid_metadata$sample, "noco_timeseries_90_")] <- "t_90m"
+condition[str_detect(padamid_metadata$sample, "noco_timeseries_180_")] <- "t_180m"
+
+
+# Sort metadata
+condition <- factor(condition, levels = c("wt", 
+                                          "DMSO", "50ng",
+                                          "control", "control_IAA", 
+                                          "thymidine", "thymidine_IAA",
+                                          "doublethy", "doublethy_IAA",
+                                          "RO", "RO_IAA",
+                                          "siRNA_scramble", "siRNA_Ki67",
+                                          "t_0h", "t_1h", "t_3h",
+                                          "t_6h", "t_10h", "t_21h",
+                                          "t_0m", "t_30m", "t_60m", 
+                                          "t_90m", "t_180m",
+                                          "GSK126", "EED226",
+                                          "DMSO_mit", "GSK126_mit", "EED226_mit"))
+
+padamid_metadata$condition <- condition
+padamid_metadata <- padamid_metadata %>%
+  arrange(experiment, cell, condition, target, combined, replicate) %>%
+  filter(! grepl("RPE.*r5", sample))
+
+
+# Separate replicate experiments and combined experiments
+padamid_metadata_replicates <- padamid_metadata %>%
+  filter(combined == F) %>%
+  mutate(class = paste(experiment, cell, condition, target, sep = "__"))
+
+padamid_metadata_combined <- padamid_metadata %>%
+  filter(combined == T)
+
+
+# Get the experiments and conditions as vectors
+experiments <- levels(padamid_metadata$experiment)
+conditions <- levels(padamid_metadata$condition)
+
+```
+
+```{r load padamid data, cache = T, message = F, warning = F}
+
+# Prepare bins
+bins <- read_tsv(str_interp(c("results/normalized/bin-${bin_size}/",
+                              "HCT116_ActD_50ng_r1_Ki67-${bin_size}", 
+                              ".norm.txt.gz")),
+                 col_names = c("seqnames", "start", "end", "score")) %>%
+  dplyr::select(-score)
+bins$start <- bins$start + 1
+  
+
+# Load bigwig files - combine into one tibble
+tmp <- bins
+
+for (i in 1:nrow(padamid_metadata_replicates)) {
+  # File name
+  f_name <- padamid_metadata_replicates$sample[i]
+  # Read file
+  f_tib <- as_tibble(import(padamid_metadata_replicates$file[i])) %>%
+    dplyr::select(-width, -strand) %>%
+    dplyr::rename_at(4, ~f_name) %>%
+    mutate(seqnames = as.character(seqnames)) %>%
+    filter(seqnames != "chrY")
+  # Add to tibble
+  tmp <- full_join(tmp, f_tib)
+}
+
+
+# Rename scores
+tib_padamid_replicates <- tmp
+gr_padamid_replicates <- as(tib_padamid_replicates, "GRanges")
+
+
+# Load bigwig files - combine into one tibble
+tmp <- bins
+
+for (i in 1:nrow(padamid_metadata_combined)) {
+  # File name
+  f_name <- padamid_metadata_combined$sample[i]
+  # Read file
+  f_tib <- as_tibble(import(padamid_metadata_combined$file[i])) %>%
+    dplyr::select(-width, -strand) %>%
+    dplyr::rename_at(4, ~f_name) %>%
+    mutate(seqnames = as.character(seqnames)) %>%
+    filter(seqnames != "chrY")
+  # Add to tibble
+  tmp <- full_join(tmp, f_tib)
+}
+
+
+# Rename scores
+tib_padamid_combined <- tmp
+gr_padamid_combined <- as(tib_padamid_combined, "GRanges")
+
+```
+
+This gives me all the data tracks of the individual replicates loaded in R,
+with detailed metadata to go with it. Also, load the HMM calls.
+
+```{r load HMM calls, cache = T, warning = F, message = F}
+
+# 1) Replicates
+# Load HMM files - combine into one tibble
+tmp <- bins
+
+for (i in 1:nrow(padamid_metadata_replicates)) {
+  # File name
+  f_name <- padamid_metadata_replicates$sample[i]
+  f_file <- str_replace(str_replace(padamid_metadata_replicates$file[i],
+                                    ".*/",
+                                    str_interp("results/HMM/bin-${bin_size}/")),
+                                ".bw", "_HMM.txt.gz")
+  # Read file
+  f_tib <- read_tsv(f_file, col_names = c("seqnames", "start", "end", "call")) %>%
+    mutate(start = start + 1) %>%
+    dplyr::rename_at(4, ~f_name) %>%
+    filter(seqnames != "chrY")
+  # Add to tibble
+  tmp <- full_join(tmp, f_tib)
+}
+
+
+# Rename scores
+tib_hmm_replicates <- tmp
+gr_hmm_replicates <- as(tib_hmm_replicates, "GRanges")
+
+
+# 2) Combined
+# Load HMM files - combine into one tibble
+tmp <- bins
+
+for (i in 1:nrow(padamid_metadata_combined)) {
+  # File name
+  f_name <- padamid_metadata_combined$sample[i]
+  f_file <- str_replace(str_replace(padamid_metadata_combined$file[i],
+                                    ".*/",
+                                    str_interp("results/HMM/bin-${bin_size}/")),
+                                ".bw", "_HMM.txt.gz")
+  # Read file
+  f_tib <- read_tsv(f_file, col_names = c("seqnames", "start", "end", "call")) %>%
+    mutate(start = start + 1) %>%
+    dplyr::rename_at(4, ~f_name) %>%
+    filter(seqnames != "chrY")
+  # Add to tibble
+  tmp <- full_join(tmp, f_tib)
+}
+
+
+# Rename scores
+tib_hmm_combined <- tmp
+gr_hmm_combined <- as(tib_hmm_combined, "GRanges")
+
+```
+
+
+### 2. Density plots and data scaling
+
+I previously used to scale the data tracks to remove technical biases between
+conditions and experiments. I don't know whether I should do this for the Ki67 
+data as well. This is relevant before combining replicates. Let's look into
+this.
+
+```{r density plots, cache = T, message = F, warning = F, fig.width = 9, fig.height = 7}
+
+# Prepare density plots for every experiment and condition
+# Do this for experiments separately 
+
+for (exp in experiments) {
+  
+  # Get experimental metadata
+  metadata_exp <- padamid_metadata_replicates %>%
+    filter(experiment == exp)
+  
+  # Get experimental tracks
+  tracks_exp <- tib_padamid_replicates %>%
+    dplyr::select(metadata_exp$sample) %>%
+    drop_na()
+  
+  # Melt data
+  tib <- tracks_exp %>%
+    gather(key, value) %>%
+    mutate(match = match(key, metadata_exp$sample)) %>%
+    mutate(cell = metadata_exp$cell[match],
+           target = metadata_exp$target[match],
+           condition = metadata_exp$condition[match],
+           replicate = metadata_exp$replicate[match])
+  
+  # Plot
+  plt <- tib %>%
+    ggplot(aes(x = value, group = key, col = condition,
+               linetype = replicate)) +
+    geom_density() +
+    ggtitle(exp) +
+    xlab("pA-DamID (log2)") +
+    ylab("Density") +
+    facet_grid(cell ~ target) +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+  plot(plt)
+  
+}
+
+```
+
+Repeat after data scaling.
+
+```{r data scaling, cache = T, message = F, warning = F, fig.width = 9, fig.height = 7}
+
+# Data scaling
+tib_padamid_replicates_scaled <- tib_padamid_replicates
+
+tmp <- tib_padamid_replicates_scaled[, 4:ncol(tib_padamid_replicates_scaled)]
+tmp <- as_tibble(scale(tmp))
+tib_padamid_replicates_scaled[, 4:ncol(tib_padamid_replicates_scaled)] <- tmp
+
+
+# New density plots
+for (exp in experiments) {
+  
+  # Get experimental metadata
+  metadata_exp <- padamid_metadata_replicates %>%
+    filter(experiment == exp)
+  
+  # Get experimental tracks
+  tracks_exp <- tib_padamid_replicates_scaled %>%
+    dplyr::select(metadata_exp$sample) %>%
+    drop_na()
+  
+  # Melt data
+  tib <- tracks_exp %>%
+    gather(key, value) %>%
+    mutate(match = match(key, metadata_exp$sample)) %>%
+    mutate(cell = metadata_exp$cell[match],
+           target = metadata_exp$target[match],
+           condition = metadata_exp$condition[match],
+           replicate = metadata_exp$replicate[match])
+  
+  # Plot
+  plt <- tib %>%
+    ggplot(aes(x = value, group = key, col = condition,
+               linetype = replicate)) +
+    geom_density() +
+    ggtitle(exp) +
+    xlab("pA-DamID (log2)") +
+    ylab("Density") +
+    facet_grid(cell ~ target) +
+    coord_cartesian(xlim = c(-3.2, 3.2)) +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+  plot(plt)
+  
+}
+
+```
+
+Overall, I do think that data scaling removes some technical differences as 
+differences are also present between biological replicates. However, it also 
+removes differences that do seem consistent between replicates. For example, 
+H3K9me3 signal after actinomycin D treatment for HCT116 and K562 cells.
+
+I need to think a bit on this. I will calculate mean scores per condition for
+unscaled and scaled data, which allows me to choose later.
+
+```{r combine replicates scores, cache = T}
+
+# 1) Unscaled data
+# This is loaded in as the replicate data
+
+# # Mean of replicates
+# tmp <- tib_padamid_replicates %>%
+#   add_column(bin = 1:nrow(.)) %>%
+#   gather(key, value, padamid_metadata_replicates$sample) %>%
+#   mutate(class = padamid_metadata_replicates$class[match(key, 
+#                                                          padamid_metadata_replicates$sample)]) %>%
+#   group_by(bin, class) %>%
+#   dplyr::summarise(mean = mean(value, na.rm = T)) %>%
+#   spread(class, mean) %>%
+#   arrange(bin) %>%
+#   drop_na(bin)
+# 
+# # Replace data
+# tib_padamid_combined <- bins %>%
+#   bind_cols(tmp[, 2:ncol(tmp)])
+
+
+# 2) Scaled data
+# Mean of replicates
+tmp <- tib_padamid_replicates_scaled %>%
+  add_column(bin = 1:nrow(.)) %>%
+  gather(key, value, padamid_metadata_replicates$sample) %>%
+  mutate(class = padamid_metadata_replicates$class[match(key, 
+                                                         padamid_metadata_replicates$sample)]) %>%
+  group_by(bin, class) %>%
+  dplyr::summarise(mean = mean(value, na.rm = T)) %>%
+  spread(class, mean) %>%
+  arrange(bin) %>%
+  drop_na(bin)
+
+# Replace data
+tib_padamid_combined_scaled <- bins %>%
+  bind_cols(tmp[, 2:ncol(tmp)])
+
+
+# New metadata
+padamid_metadata_combined_replicates <- 
+  tibble(sample = names(tib_padamid_combined)[4:ncol(tib_padamid_combined)]) %>%
+  separate(sample, c("experiment", "cell", "condition", "target"), sep = "__", remove = F) %>%
+  mutate(experiment = factor(experiment, 
+                             levels(padamid_metadata_replicates$experiment)),
+         cell = factor(cell, 
+                       levels(padamid_metadata_replicates$cell)),
+         condition = factor(condition, 
+                            levels(padamid_metadata_replicates$condition)),
+         target = factor(target, 
+                         levels(padamid_metadata_replicates$target))) %>%
+  arrange(experiment, cell, condition, target)
+
+
+# Before saving, let's add the chromosome size
+chrom_size <- read.table("~/mydata/data/genomes/GRCh38/hg38.chrom.sizes", sep = "\t")
+row.names(chrom_size) <- chrom_size[, 1]
+seqlengths(gr_padamid_replicates) <- chrom_size[seqlevels(gr_padamid_replicates), 2]
+seqlengths(gr_padamid_combined) <- chrom_size[seqlevels(gr_padamid_combined), 2]
+
+
+```
+
+
+### 3. Example tracks
+
+I will also prepare a few (prettier) example tracks for presentations initially.
+IGV tracks are always so ugly.
+
+```{r example tracks, cache = T, fig.width = 7, fig.height = 8}
+
+# Wildtype tracks 
+PlotDataTracks(tib_padamid_combined, "wt", padamid_metadata_combined, centromeres,
+               #tib_hmm_combined,
+               smooth = 9, remove_samples = "H3K", fix_yaxis = F,
+               plot_chr = "chr2", fill_column = "cell", color_list = colors_set2)
+PlotDataTracks(tib_padamid_combined, "wt", padamid_metadata_combined, centromeres,
+               #tib_hmm_combined,
+               smooth = 9, remove_samples = "H3K", fix_yaxis = F,
+               plot_chr = "chr21", fill_column = "cell", color_list = colors_set2)
+PlotDataTracks(tib_padamid_combined, "wt", padamid_metadata_combined, centromeres,
+               #tib_hmm_combined,
+               smooth = 9, remove_samples = "H3K", fix_yaxis = F,
+               plot_chr = "chr22", fill_column = "cell", color_list = colors_set2)
+
+PlotDataTracks(tib_padamid_replicates, "wt", padamid_metadata_replicates, centromeres,
+               #tib_hmm_combined,
+               smooth = 9, remove_samples = "H3K|LMN", fix_yaxis = F,
+               plot_chr = "chr2", fill_column = "cell", color_list = colors_set2)
+PlotDataTracks(tib_padamid_replicates, "wt", padamid_metadata_replicates, centromeres,
+               #tib_hmm_combined,
+               smooth = 9, remove_samples = "H3K|LMN", fix_yaxis = F,
+               plot_chr = "chr22", fill_column = "cell", color_list = colors_set2)
+
+
+# Actinomycin D
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "K562|RPE", fix_yaxis = F,
+               plot_chr = "chr2", fill_column = "target", color_list = colors_set1)
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "RPE|HCT116", fix_yaxis = F,
+               plot_chr = "chr2", fill_column = "target", color_list = colors_set1)
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "K562|HCT116", fix_yaxis = F,
+               plot_chr = "chr2", fill_column = "target", color_list = colors_set1)
+
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K", fix_yaxis = F,
+               plot_chr = "chr1", fill_column = "target", color_list = colors_set1)
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K", fix_yaxis = F,
+               plot_chr = "chr1", fill_column = "condition", color_list = colors_set3)
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K", fix_yaxis = F,
+               plot_chr = "chr13", fill_column = "target", color_list = colors_set1)
+
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K|LMN", fix_yaxis = T,
+               plot_chr = "chr12", fill_column = "condition", color_list = colors_set3)
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K|LMN", fix_yaxis = T,
+               plot_chr = "chr13", fill_column = "condition", color_list = colors_set3)
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K|LMN", fix_yaxis = T,
+               plot_chr = "chr22", fill_column = "condition", color_list = colors_set3)
+
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "LMN|50ng", fix_yaxis = F,
+               plot_chr = "chr2", fill_column = "target", color_list = colors_set1)
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "LMN|50ng", fix_yaxis = F,
+               plot_chr = "chr12", fill_column = "target", color_list = colors_set1)
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "LMN|50ng", fix_yaxis = F,
+               plot_chr = "chr22", fill_column = "target", color_list = colors_set1)
+
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K|50ng", fix_yaxis = F,
+               plot_chr = "chr2", fill_column = "target", color_list = colors_set1)
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K|50ng", fix_yaxis = F,
+               plot_chr = "chr12", fill_column = "target", color_list = colors_set1)
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K|50ng", fix_yaxis = F,
+               plot_chr = "chr22", fill_column = "target", color_list = colors_set1)
+
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "LMN|K562|RPE", fix_yaxis = F,
+               plot_chr = "chr12", fill_column = "target", color_list = colors_set1)
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "LMN|HCT116|RPE", fix_yaxis = F,
+               plot_chr = "chr12", fill_column = "target", color_list = colors_set1)
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "LMN|HCT116|K562", fix_yaxis = F,
+               plot_chr = "chr12", fill_column = "target", color_list = colors_set1)
+
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K27|K562|RPE", fix_yaxis = F,
+               plot_chr = "chr12", fill_column = "target", color_list = colors_set1)
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K27|HCT116|RPE", fix_yaxis = F,
+               plot_chr = "chr12", fill_column = "target", color_list = colors_set1)
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K27|HCT116|K562", fix_yaxis = F,
+               plot_chr = "chr12", fill_column = "target", color_list = colors_set1)
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K27|K562|RPE", fix_yaxis = F,
+               plot_chr = "chr22", fill_column = "target", color_list = colors_set1)
+PlotDataTracks(tib_padamid_combined, "Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K27|HCT116|RPE", fix_yaxis = F,
+               plot_chr = "chr22", fill_column = "target", color_list = colors_set1)
+
+# Ki67-AID
+PlotDataTracks(tib_padamid_combined, "wt|AID", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "RPE|K562|thy|RO|AID.*Ki67|wt.*H3K", fix_yaxis = T,
+               plot_chr = "chr1", fill_column = "target", color_list = colors_set1)
+PlotDataTracks(tib_padamid_combined, "wt|AID", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "RPE|K562|thy|RO|AID.*Ki67|wt.*H3K", fix_yaxis = T,
+               plot_chr = "chr13", fill_column = "target", color_list = colors_set1)
+PlotDataTracks(tib_padamid_combined, "wt|AID", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "RPE|K562|thy|RO|AID.*Ki67|wt.*H3K", fix_yaxis = T,
+               plot_chr = "chr22", fill_column = "target", color_list = colors_set1)
+
+PlotDataTracks(tib_padamid_combined, "wt|AID", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "AID.*Ki67|H3K", fix_yaxis = T,
+               plot_chr = "chr1", fill_column = "target", color_list = colors_set1)
+PlotDataTracks(tib_padamid_combined, "wt|AID", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "AID.*Ki67|H3K", fix_yaxis = T,
+               plot_chr = "chr13", fill_column = "target", color_list = colors_set1)
+PlotDataTracks(tib_padamid_combined, "wt|AID", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "AID.*Ki67|H3K", fix_yaxis = T,
+               plot_chr = "chr22", fill_column = "target", color_list = colors_set1)
+
+
+PlotDataTracks(tib_padamid_combined, "wt|AID", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K|K562|RPE|AID.*Ki67", fix_yaxis = T,
+               plot_chr = "chr1", fill_column = "experiment", color_list = colors_set3)
+PlotDataTracks(tib_padamid_combined, "wt|AID", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K|K562|RPE|AID.*Ki67", fix_yaxis = T,
+               plot_chr = "chr15", fill_column = "experiment", color_list = colors_set3)
+
+# Cell cycle tracks
+PlotDataTracks(tib_padamid_combined, "RPE", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "RPE_21h_Ki67", fix_yaxis = T,
+               plot_chr = "chr2", fill_column = "experiment", color_list = colors_set3)
+PlotDataTracks(tib_padamid_combined, "RPE", padamid_metadata_combined, centromeres,
+               tib_hmm_combined,
+               smooth = 9, remove_samples = "RPE_21h_Ki67", fix_yaxis = T,
+               plot_chr = "chr2", fill_column = "experiment", color_list = colors_set3)
+PlotDataTracks(tib_padamid_combined, "RPE", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "RPE_21h_Ki67", fix_yaxis = T, 
+               plot_chr = "chr13", fill_column = "experiment", color_list = colors_set3)
+PlotDataTracks(tib_padamid_combined, "RPE", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "RPE_21h_Ki67", fix_yaxis = T,
+               plot_chr = "chr22", fill_column = "experiment", color_list = colors_set3)
+
+# Cell cycle and actinomycin D
+PlotDataTracks(tib_padamid_combined, "Act|RPE|AID", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "K562|10h|21h|wt|Act.*LMN|H3K|thy|RO|ctr.*Ki67", 
+               plot_chr = "chr1", fill_column = "experiment", color_list = colors_set3)
+
+PlotDataTracks(tib_padamid_combined, "Act|RPE", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "K562|_0h|21h|wt|Act.*LMN|H3K|thy|RO|ctr.*Ki67", 
+               plot_chr = "chr11", fill_column = "experiment", color_list = colors_set3)
+PlotDataTracks(tib_padamid_combined, "Act|RPE", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "K562|_0h|21h|wt|Act.*LMN|H3K|thy|RO|ctr.*Ki67", 
+               plot_chr = "chr21", fill_column = "experiment", color_list = colors_set3)
+
+
+```
+
+```{r additional example tracks ts210413, cache = T, fig.width = 8, fig.height = 6}
+
+PlotDataTracks(tib_padamid_combined, "AID", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "RPE|K562|ctrl|H3K|_thy|IAA.*Ki", fix_yaxis = F,
+               plot_chr = "chr1", fill_column = "target", color_list = colors_set1)
+
+PlotDataTracks(tib_padamid_combined, "AID", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "RPE|K562|ctrl|H3K|_thy|IAA.*Ki", fix_yaxis = F,
+               plot_chr = "chr6", fill_column = "target", color_list = colors_set1)
+
+PlotDataTracks(tib_padamid_combined, "AID", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "RPE|K562|ctrl|H3K|_thy|IAA.*Ki", fix_yaxis = F,
+               plot_chr = "chr14", fill_column = "target", color_list = colors_set1)
+
+
+PlotDataTracks(tib_padamid_combined, "AID", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "RPE|K562|ctrl|_thy|IAA.*Ki|RO", fix_yaxis = F,
+               plot_chr = "chr14", fill_column = "target", color_list = colors_set1)
+
+
+```
+
+```{r additional example tracks ts210416, cache = T, fig.width = 8, fig.height = 7}
+
+# Osmotic shock
+PlotDataTracks(tib_padamid_combined, "Osm", padamid_metadata_combined, centromeres,
+               smooth = 9, 
+               plot_chr = "chr1", fill_column = "condition", color_list = colors_set3)
+
+
+PlotDataTracks(tib_padamid_combined, "Osm|Act", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "LMN|H3K|K562|HCT",
+               plot_chr = "chr1", fill_column = "experiment", color_list = colors_set3)
+
+PlotDataTracks(tib_padamid_combined, "RPE", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "Act|H3K|LMN|_0h|_10h|_21h",
+               plot_chr = "chr1", fill_column = "experiment", color_list = colors_set3)
+
+PlotDataTracks(tib_padamid_combined, "RPE", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K|LMN|_0h|_10h|_21h",
+               plot_chr = "chr1", fill_column = "experiment", color_list = colors_set3)
+
+PlotDataTracks(tib_padamid_combined, "RPE", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K|LMN|_0h|_10h|_21h",
+               plot_chr = "chr2", fill_column = "experiment", color_list = colors_set3)
+
+PlotDataTracks(tib_padamid_combined, "RPE", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K|LMN|_0h|_10h|_21h",
+               plot_chr = "chr13", fill_column = "experiment", color_list = colors_set3)
+
+PlotDataTracks(tib_padamid_combined, "RPE", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K|LMN|_0h|_10h|_21h",
+               plot_chr = "chr22", fill_column = "experiment", color_list = colors_set3)
+
+
+
+```
+
+```{r additional example tracks ts210519, cache = T, fig.width = 8, fig.height = 7}
+
+# Ki67 antibodies
+PlotDataTracks(tib_padamid_combined, "HCT116_wt", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K|LM", fix_yaxis = T,
+               plot_chr = "chr2", fill_column = "target", color_list = colors_set1)
+
+PlotDataTracks(tib_padamid_combined, "HCT116_wt", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K|LM", fix_yaxis = T,
+               plot_chr = "chr22", fill_column = "target", color_list = colors_set1)
+
+
+# H3K27me3 inhibition
+PlotDataTracks(tib_padamid_combined, "RPE_wt|RPE_H3K27", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "mit",
+               plot_chr = "chr17", fill_column = "target", color_list = colors_set1, fix_yaxis = T)
+
+PlotDataTracks(tib_padamid_combined, "RPE_wt|RPE_0h|RPE_1h|RPE_3h|RPE_H3K27", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "inh_D|inh_G|inh_E",
+               plot_chr = "chr3", fill_column = "experiment", color_list = colors_set1)
+
+PlotDataTracks(tib_padamid_combined, "RPE_wt|RPE_0h|RPE_1h|RPE_3h|RPE_H3K27", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "inh_D|inh_G|inh_E", plot_end = 50e6,
+               plot_chr = "chr3", fill_column = "experiment", color_list = colors_set3)
+
+
+# Nocodazole time series
+PlotDataTracks(tib_padamid_combined, "RPE_wt|RPE_0h|RPE_1h|RPE_noco", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K", 
+               plot_chr = "chr2", fill_column = "experiment", color_list = colors_set3)
+
+PlotDataTracks(tib_padamid_combined, "RPE_wt|RPE_0h|RPE_1h|RPE_noco", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K", 
+               plot_chr = "chr3", fill_column = "experiment", color_list = colors_set3)
+
+PlotDataTracks(tib_padamid_combined, "RPE_wt|RPE_0h|RPE_1h|RPE_noco", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K", 
+               plot_chr = "chr13", fill_column = "experiment", color_list = colors_set3)
+
+PlotDataTracks(tib_padamid_combined, "RPE_wt|RPE_0h|RPE_1h|RPE_noco", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K", 
+               plot_chr = "chr22", fill_column = "experiment", color_list = colors_set3)
+
+
+```
+
+```{r additional example tracks ts210610, cache = T, fig.width = 8, fig.height = 3.5}
+
+# Ki67 knockdown
+PlotDataTracks(tib_padamid_combined, "HCT116_AID_ctrl", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K|LMN", fix_yaxis = T,
+               plot_chr = "chr2", fill_column = "target", color_list = "grey30")
+
+PlotDataTracks(tib_padamid_combined, "HCT116_AID_ctrl", padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "H3K|LMN", fix_yaxis = T,
+               plot_chr = "chr22", fill_column = "target", color_list = "grey30")
+
+
+# Also prepare pearson correlation plot
+pearson_correlation <- round(cor(tib_padamid_combined$HCT116_AID_ctrl_Ki67, 
+                                 tib_padamid_combined$HCT116_AID_ctrl_IAA_Ki67,
+                                 method = "pearson", use = "complete.obs"),
+                             digits = 2)
+
+# Plot
+limits = range(c(quantile(tib_padamid_combined$HCT116_AID_ctrl_Ki67, 
+                          c(0.001, 0.999), na.rm = T), 
+                 quantile(tib_padamid_combined$HCT116_AID_ctrl_IAA_Ki67,
+                          c(0.001, 0.999), na.rm = T))) * 1.2
+
+plt <- ggplot(tib_padamid_combined, 
+              aes(x = HCT116_AID_ctrl_Ki67, y = HCT116_AID_ctrl_IAA_Ki67)) +
+  geom_bin2d(bins = 100) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", col = "red") +
+  #geom_smooth(method = "lm", col = "blue", se = FALSE) +
+  xlim(limits[1], limits[2]) +
+  ylim(limits[1], limits[2]) +
+  ggtitle(paste("r = ", pearson_correlation)) +
+  #xlab("r1") + 
+  #ylab("r2") +
+  scale_fill_gradient(low = "lightgrey", high = "black", name = "Count") +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+print(plt)
+
+
+# Also, for Ki67 antibodies
+# Also prepare pearson correlation plot
+p_hpa <- round(cor(tib_padamid_combined$HCT116_wt_Ki67, 
+                   tib_padamid_combined$HCT116_wt_Ki67HPA,
+                   method = "pearson", use = "complete.obs"),
+               digits = 2)
+p_nov <- round(cor(tib_padamid_combined$HCT116_wt_Ki67, 
+                   tib_padamid_combined$HCT116_wt_Ki67NOV,
+                   method = "pearson", use = "complete.obs"),
+               digits = 2)
+
+# Plot
+limits = range(c(quantile(tib_padamid_combined$HCT116_wt_Ki67, 
+                          c(0.001, 0.999), na.rm = T), 
+                 quantile(tib_padamid_combined$HCT116_wt_Ki67HPA, 
+                          c(0.001, 0.999), na.rm = T), 
+                 quantile(tib_padamid_combined$HCT116_wt_Ki67NOV,
+                          c(0.001, 0.999), na.rm = T))) * 1.2
+
+plt <- ggplot(tib_padamid_combined, 
+              aes(x = HCT116_wt_Ki67, y = HCT116_wt_Ki67HPA)) +
+  geom_bin2d(bins = 100) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", col = "red") +
+  #geom_smooth(method = "lm", col = "blue", se = FALSE) +
+  xlim(limits[1], limits[2]) +
+  ylim(limits[1], limits[2]) +
+  ggtitle(paste("r = ", p_hpa)) +
+  #xlab("r1") + 
+  #ylab("r2") +
+  scale_fill_gradient(low = "lightgrey", high = "black", name = "Count") +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+print(plt)
+
+plt <- ggplot(tib_padamid_combined, 
+              aes(x = HCT116_wt_Ki67, y = HCT116_wt_Ki67NOV)) +
+  geom_bin2d(bins = 100) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", col = "red") +
+  #geom_smooth(method = "lm", col = "blue", se = FALSE) +
+  xlim(limits[1], limits[2]) +
+  ylim(limits[1], limits[2]) +
+  ggtitle(paste("r = ", p_nov)) +
+  #xlab("r1") + 
+  #ylab("r2") +
+  scale_fill_gradient(low = "lightgrey", high = "black", name = "Count") +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+print(plt)
+
+
+
+# More data tracks
+PlotDataTracks(tib_padamid_combined, "wt", padamid_metadata_combined, centromeres,
+               #tib_hmm_combined,
+               smooth = 9, remove_samples = "H3K|LMN|NOV|HPA", fix_yaxis = T,
+               plot_chr = "chr2", fill_column = "cell", color_list = colors_set2)
+
+PlotDataTracks(tib_padamid_combined, "wt", padamid_metadata_combined, centromeres,
+               #tib_hmm_combined,
+               smooth = 9, remove_samples = "H3K|LMN|NOV|HPA", fix_yaxis = T,
+               plot_chr = "chr22", fill_column = "cell", color_list = colors_set2)
+
+```
+
+```{r additional example tracks ts210611, cache = T, fig.width = 4.5, fig.height = 6}
+
+# Ki67 knockdown
+PlotDataTracks(tib_padamid_combined, "HCT116_wt|HCT116_ActD_DMSO", 
+               padamid_metadata_combined, centromeres,
+               smooth = 9, 
+               remove_samples = "NOV|HPA|DMSO_L|DMSO_K|DMSO_H3K2", 
+               fix_yaxis = F,
+               plot_chr = "chr11", fill_column = "target", 
+               plot_end = 65e6, color_list = colors_set1)
+
+PlotDataTracks(tib_padamid_combined, "RPE_wt", 
+               padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "xxx", fix_yaxis = F,
+               plot_chr = "chr11", fill_column = "target", 
+               plot_end = 65e6, color_list = colors_set1)
+
+PlotDataTracks(tib_padamid_combined, "K562_wt", 
+               padamid_metadata_combined, centromeres,
+               smooth = 9, remove_samples = "xxx", fix_yaxis = F,
+               plot_chr = "chr11", fill_column = "target", 
+               plot_end = 65e6, color_list = colors_set1)
+```
+
+```{r additional example tracks ts210615, cache = T, fig.width = 7, fig.height = 6}
+
+# Cell cycle tracks
+PlotDataTracks(tib_padamid_combined %>%
+                 mutate_at(4:ncol(tib_padamid_combined),
+                           function(x) scale(x)[, 1]), 
+               "RPE_", 
+               padamid_metadata_combined, centromeres,
+               smooth = 9, 
+               remove_samples = "H3|LM|Act|21h|Osm|noco", 
+               fix_yaxis = T,
+               plot_chr = "chr2", fill_column = "experiment", 
+               color_list = c("grey30", "#E41A1C"))
+
+PlotDataTracks(tib_padamid_combined %>%
+                 mutate_at(4:ncol(tib_padamid_combined),
+                           function(x) scale(x)[, 1]), 
+               "RPE_", 
+               padamid_metadata_combined, centromeres,
+               smooth = 9, 
+               remove_samples = "H3|LM|Act|21h|Osm|noco", 
+               fix_yaxis = T,
+               plot_chr = "chr22", fill_column = "experiment", 
+               color_list = c("grey30", "#E41A1C"))
+
+
+# With histones
+PlotDataTracks(tib_padamid_combined %>%
+                 mutate_at(4:ncol(tib_padamid_combined),
+                           function(x) scale(x)[, 1]), 
+               "RPE_", 
+               padamid_metadata_combined %>%
+                 arrange(target), 
+               centromeres,
+               smooth = 9, 
+               remove_samples = "LM|Act|21h|Osm|noco|3h|6h|10h|inh|wt_Ki", 
+               fix_yaxis = F,
+               plot_chr = "chr1", fill_column = "target",
+               plot_end = 30e6,
+               color_list = colors_set1)
+
+```
+
+```{r additional example tracks ts210628, cache = T, fig.width = 6, fig.height = 5.5}
+
+# Cell cycle tracks
+PlotDataTracks(tib_padamid_combined %>%
+                 mutate_at(4:ncol(tib_padamid_combined),
+                           function(x) scale(x)[, 1]), 
+               "RPE_", 
+               padamid_metadata_combined, centromeres,
+               smooth = 9, 
+               remove_samples = "H3|LM|Act|21h|noco|_0m|_0h|3h|6h", 
+               fix_yaxis = T,
+               plot_chr = "chr1", fill_column = "experiment", 
+               color_list = c("grey30", "#E41A1C", colors_set1[1:5], "#4DAF4A"))
+
+PlotDataTracks(tib_padamid_combined %>%
+                 mutate_at(4:ncol(tib_padamid_combined),
+                           function(x) scale(x)[, 1]), 
+               "RPE_", 
+               padamid_metadata_combined, centromeres,
+               smooth = 9, 
+               remove_samples = "H3|LM|Act|21h|noco|_0m|_0h|3h|6h", 
+               fix_yaxis = T,
+               plot_chr = "chr2", fill_column = "experiment", 
+               color_list = c("grey30", "#E41A1C", colors_set1[1:5], "#4DAF4A"))
+
+PlotDataTracks(tib_padamid_combined %>%
+                 mutate_at(4:ncol(tib_padamid_combined),
+                           function(x) scale(x)[, 1]), 
+               "RPE_", 
+               padamid_metadata_combined, centromeres,
+               smooth = 9, 
+               remove_samples = "H3|LM|Act|21h|noco|_0m|_0h|3h|6h", 
+               fix_yaxis = T,
+               plot_chr = "chr3", fill_column = "experiment", 
+               color_list = c("grey30", "#E41A1C", colors_set1[1:5], "#4DAF4A"))
+
+PlotDataTracks(tib_padamid_combined %>%
+                 mutate_at(4:ncol(tib_padamid_combined),
+                           function(x) scale(x)[, 1]), 
+               "RPE_", 
+               padamid_metadata_combined, centromeres,
+               smooth = 9, 
+               remove_samples = "H3|LM|Act|21h|noco|_0m|_0h|3h|6h", 
+               fix_yaxis = T,
+               plot_chr = "chr4", fill_column = "experiment", 
+               color_list = c("grey30", "#E41A1C", colors_set1[1:5], "#4DAF4A"))
+
+PlotDataTracks(tib_padamid_combined %>%
+                 mutate_at(4:ncol(tib_padamid_combined),
+                           function(x) scale(x)[, 1]), 
+               "RPE_", 
+               padamid_metadata_combined, centromeres,
+               smooth = 9, 
+               remove_samples = "H3|LM|Act|21h|noco|_0m|_0h|3h|6h", 
+               fix_yaxis = T,
+               plot_chr = "chr5", fill_column = "experiment", 
+               color_list = c("grey30", "#E41A1C", colors_set1[1:5], "#4DAF4A"))
+
+PlotDataTracks(tib_padamid_combined %>%
+                 mutate_at(4:ncol(tib_padamid_combined),
+                           function(x) scale(x)[, 1]), 
+               "RPE_", 
+               padamid_metadata_combined, centromeres,
+               smooth = 9, 
+               remove_samples = "H3|LM|Act|21h|noco|_0m|_0h|3h|6h", 
+               fix_yaxis = T,
+               plot_chr = "chr19", fill_column = "experiment", 
+               color_list = c("grey30", "#E41A1C", colors_set1[1:5], "#4DAF4A"))
+
+PlotDataTracks(tib_padamid_combined %>%
+                 mutate_at(4:ncol(tib_padamid_combined),
+                           function(x) scale(x)[, 1]), 
+               "RPE_", 
+               padamid_metadata_combined, centromeres,
+               smooth = 9, 
+               remove_samples = "H3|LM|Act|21h|noco|_0m|_0h|3h|6h", 
+               fix_yaxis = T,
+               plot_chr = "chr20", fill_column = "experiment", 
+               color_list = c("grey30", "#E41A1C", colors_set1[1:5], "#4DAF4A"))
+
+PlotDataTracks(tib_padamid_combined %>%
+                 mutate_at(4:ncol(tib_padamid_combined),
+                           function(x) scale(x)[, 1]), 
+               "RPE_", 
+               padamid_metadata_combined, centromeres,
+               smooth = 9, 
+               remove_samples = "H3|LM|Act|21h|noco|_0m|_0h|3h|6h", 
+               fix_yaxis = T,
+               plot_chr = "chr21", fill_column = "experiment", 
+               color_list = c("grey30", "#E41A1C", colors_set1[1:5], "#4DAF4A"))
+
+PlotDataTracks(tib_padamid_combined %>%
+                 mutate_at(4:ncol(tib_padamid_combined),
+                           function(x) scale(x)[, 1]), 
+               "RPE_", 
+               padamid_metadata_combined, centromeres,
+               smooth = 9, 
+               remove_samples = "H3|LM|Act|21h|noco|_0m|_0h|3h|6h", 
+               fix_yaxis = T,
+               plot_chr = "chr22", fill_column = "experiment", 
+               color_list = c("grey30", "#E41A1C", colors_set1[1:5], "#4DAF4A"))
+
+```
+
+Finally, I also want a data track highlighting the raw counts and normalized 
+data. For simplicity, let's load one data track only.
+
+```{r normalization tracks, cache = T, fig.width = 6, fig.height = 5}
+
+# Load counts and add to bins
+tib_padamid_counts <- tib_padamid_replicates %>%
+  dplyr::select(seqnames, start, end, HCT116_wt_r2_Ki67)
+
+tmp <- import(str_interp("results/tracks/counts/bin-${bin_size}/HCT116_wt_r2_Dam-50kb.bw"))
+ovl <- findOverlaps(gr_padamid_replicates, tmp, select = "arbitrary")
+tib_padamid_counts$HCT116_wt_r2_Dam_counts <- tmp$score[ovl]
+
+tmp <- import(str_interp("results/tracks/counts/bin-${bin_size}/HCT116_wt_r2_Ki67-50kb.bw"))
+ovl <- findOverlaps(gr_padamid_replicates, tmp, select = "arbitrary")
+tib_padamid_counts$HCT116_wt_r2_Ki67_counts <- tmp$score[ovl]
+ 
+
+# Create metadata for counts
+padamid_metadata_counts <- padamid_metadata_replicates %>%
+  filter(sample == "HCT116_wt_r2_Ki67") %>%
+  bind_rows(tibble(file = "",
+                   sample = c("HCT116_wt_r2_Dam_counts",
+                              "HCT116_wt_r2_Ki67_counts"),
+                   cell = "HCT116",
+                   target = c("Dam", "Ki67"),
+                   replicate = "r2",
+                   combined = F,
+                   experiment = "wildtype",
+                   condition = "counts",
+                   class = "wildtype__HCT116__wt__Ki67")) %>%
+  mutate(condition = factor(condition, levels = c("counts", "wt")),
+         target = factor(target, levels = c("Ki67", "Dam"))) %>%
+  arrange(condition, target)
+
+tib_padamid_counts <- tib_padamid_counts %>%
+  dplyr::select(seqnames, start, end, 
+                one_of(padamid_metadata_counts$sample))
+
+# Plot
+PlotDataTracks(tib_padamid_counts, exp_names = "HCT116", padamid_metadata_counts, centromeres,
+               #tib_hmm_replicates,
+               fill_column = "target", color_list = c("grey30", "grey75"), smooth = 9,
+               plot_chr = "chr2", counts = T)
+
+PlotDataTracks(tib_padamid_counts, exp_names = "HCT116", padamid_metadata_counts, centromeres,
+               #tib_hmm_replicates,
+               fill_column = "target", color_list = c("grey30", "grey75"), smooth = 9,
+               plot_chr = "chr13", counts = T)
+ 
+PlotDataTracks(tib_padamid_counts, exp_names = "HCT116", padamid_metadata_counts, centromeres,
+               #tib_hmm_replicates,
+               fill_column = "target", color_list = c("grey30", "grey75"), smooth = 9,
+               plot_chr = "chr22", counts = T)
+
+```
+
+
+### 4. Correlation plots between replicates
+
+I want to show that replicate experiments correlate well. Let's do that here.
+
+```{r correlation between replicates, cache = T, fig.width = 5, fig.height = 3.5, warning = F, message = F}
+
+# Correlation plots for all replicates
+for (c in levels(padamid_metadata_replicates$cell)) {
+  for (t in levels(padamid_metadata_replicates$target)) {
+    for (cond in levels(padamid_metadata_replicates$condition)) {
+      
+      # Get corresponding replicates for every unique condition
+      tmp_metadata <- padamid_metadata_replicates %>%
+        filter(cell == c & 
+               target == t & 
+               condition == cond)
+      
+      # Only if >1 samples exist
+      if (nrow(tmp_metadata) < 2) {
+        next
+      }
+      
+      # Correlation plot of replicate 1-2
+      tmp_tib <- tib_padamid_replicates %>%
+        dplyr::select(seqnames, tmp_metadata$sample[1:2]) %>%
+        dplyr::rename_all(~ c("seqnames", "n1", "n2")) %>%
+        drop_na()
+      
+      # Plot
+      title <- paste(c, t, cond, sep = "_")
+      
+      # Calculate pearson correlation
+      pearson_correlation <- round(cor(tmp_tib$n1, tmp_tib$n2, 
+                                       method = "pearson"),
+                                   digits = 2)
+      
+      # Plot
+      limits = range(c(quantile(tmp_tib$n1, 
+                                c(0.001, 0.999)), 
+                       quantile(tmp_tib$n2, 
+                                c(0.001, 0.999)))) * 1.2
+      
+      plt <- ggplot(tmp_tib, aes(x = n1, y = n2)) +
+        geom_bin2d(bins = 100) +
+        geom_abline(intercept = 0, slope = 1, linetype = "dashed", col = "red") +
+        #geom_smooth(method = "lm", col = "blue", se = FALSE) +
+        xlim(limits[1], limits[2]) +
+        ylim(limits[1], limits[2]) +
+        ggtitle(paste(title, "-", 
+                      "r = ", pearson_correlation)) +
+        xlab("r1") + 
+        ylab("r2") +
+        scale_fill_gradient(low = "lightgrey", high = "black", name = "Count") +
+        theme_bw() +
+        theme(aspect.ratio = 1)
+      
+      print(plt)
+      
+      
+      # Also, correlation per chromosome
+      plt <- tmp_tib %>%
+        filter(seqnames != "chrY") %>%
+        group_by(seqnames) %>%
+        dplyr::summarise(cor = cor(n1, n2, method = "pearson")) %>%
+        ungroup() %>%
+        mutate(size = seqlengths(gr_padamid_replicates)[match(seqnames,
+                                                              seqlevels(gr_padamid_replicates))]) %>%
+        arrange(-size) %>%
+        mutate(seqnames = factor(seqnames, levels = unique(seqnames))) %>%
+        ggplot(aes(x = seqnames, y = cor)) +
+        geom_point() +
+        geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+        xlab("") +
+        ylab("Pearson") +
+        ggtitle(title) +
+        theme_bw() +
+        theme(aspect.ratio = 1,
+          axis.text.x = element_text(angle = 90, hjust = 1))
+      plot(plt)
+      
+    } 
+  }
+}
+
+```
+
+```{r compare all replicates, fig.width = 5, fig.height = 3.5}
+
+# I also want to prepare a figure that shows all the correlation values
+# Do this without data scaling!
+tib <- tib_padamid_replicates %>%
+  dplyr::select(-(1:3))
+
+tib_cor <- tib %>%
+  mutate(bin = 1:nrow(.)) %>%
+  drop_na() %>%
+  gather(key, value, -bin) %>%
+  mutate(idx = match(key, padamid_metadata_replicates$sample),
+         target = padamid_metadata_replicates$target[idx],
+         cell = padamid_metadata_replicates$cell[idx],
+         experiment = padamid_metadata_replicates$experiment[idx],
+         condition = padamid_metadata_replicates$condition[idx],
+         replicate = padamid_metadata_replicates$replicate[idx]) %>%
+  filter(target == "Ki67") %>%
+  filter(! experiment %in% c("H3K27me3_inhibition", "noco_time_series")) %>%
+  filter(! condition %in% c("control_IAA", "doublethy_IAA", "RO_IAA",
+                            "t_0m", "t_21h", "control"))
+  #separate(key, c("condition", "timepoint", "replicate"), remove = F) %>%
+
+tib_cor <- tib_cor %>%
+  group_by(cell, target, experiment, condition) %>%
+  nest() %>%
+  mutate(data2 = map(data, 
+                     function(df) select(df, -replicate, -idx)),
+         data2 = map(data2, 
+                     spread, key = key, value = value),
+         data2 = map(data2, 
+                     function(df) select(df, -bin)),
+         pearson = map(data2, cor),
+         pearson = map(pearson, 
+                       function(df) gather(as_tibble(df),
+                                           key = key, value = value))) %>%
+  unnest(pearson) %>%
+  dplyr::select(-contains("data")) %>%
+  ungroup()
+
+tib_cor <- tib_cor %>%
+  group_by(cell, target, experiment, condition) %>%
+  mutate(partner = rep(unique(key), 
+                      length(unique(key)))) %>%
+  ungroup() %>%
+  filter(key != partner,
+         key > partner)
+
+# Plot
+tib_cor %>%
+  #mutate(cell = factor(cell, rev(levels(cell)))) %>%
+  ggplot(aes(x = cell, y = value, fill = cell)) +
+  #geom_boxplot(col = "black", outlier.shape = NA) +
+  stat_summary(fun.data = quantiles, geom = "boxplot", col = "black") +
+  geom_quasirandom(col = "black") +
+  geom_hline(yintercept = c(0, 1), col = "black", linetype = "dashed") +
+  #coord_flip()  +
+  #scale_x_discrete(limits = rev(levels(tib_cor$cell))) +
+  ylab("Pearson") +
+  xlab("") +
+  scale_fill_brewer(palette = "Set2", guide = F) +
+  theme_bw() +
+  theme(aspect.ratio = 1.5,
+        axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+Clearly, some condition need better replicates.
+
+
+### 5. Load DamID data
+
+Also, load DamID data of relevant cell types, for comparisons now and later.
+
+```{r process damid, cache = T, fig.width = 9, fig.height = 8}
+
+# List files
+filter_samples_damid <- paste(c("H1", "Hap1", "CENPB", "U2OS", "IMR90"),
+                              collapse = "|")
+
+damid_files <- dir("../ts180110_4DN_DataProcessing/results/tracks/normalized/bin-50kb/", 
+                     recursive = T, full.names = T, pattern = "combined")
+damid_files <- grep(filter_samples_damid, damid_files, value = T, invert = T)
+
+
+# Prepare into metadata
+damid_metadata <- tibble(file = damid_files) %>%
+  mutate(sample = str_remove(basename(file), "\\..*"),
+         sample = str_remove(sample, "-.*")) %>%
+  mutate(cell = str_remove(sample, "_.*"),
+         target = str_remove(sample, ".*_"),
+         replicate = NA,
+         combined = T,
+         experiment = "wildtype") %>%
+  # Add factor levels
+  mutate(cell = factor(cell, c("RPE", "HCT116", "K562", "HFF")),
+         experiment = factor(experiment, c("wildtype")),
+         target = factor(target, c("LMNB1", "4xAP3")),
+         replicate = factor(replicate, c("r1", "r2", "r3", "r4", "r5")),
+         condition = "wt")
+
+# Load bigwig files - combine into one tibble
+tmp <- bins
+
+for (i in 1:nrow(damid_metadata)) {
+  # File name
+  f_name <- damid_metadata$sample[i]
+  # Read file
+  f_tib <- as_tibble(import(damid_metadata$file[i])) %>%
+    dplyr::select(-width, -strand) %>%
+    dplyr::rename_at(4, ~f_name) %>%
+    mutate(seqnames = as.character(seqnames))
+  # Add to tibble
+  tmp <- full_join(tmp, f_tib)
+}
+
+
+# Rename scores
+tib_damid_combined <- tmp
+gr_damid_combined <- as(tib_damid_combined, "GRanges")
+
+
+# Plots
+PlotDataTracksLight <- function(input_tib, exp_names, centromeres, 
+                                color_groups, plot_chr = "chr1", 
+                                plot_start = 1, plot_end = 500e6,
+                                smooth = 1, color_list = NULL,
+                                fix_yaxis = F) {
+  
+  # Exp names is a vector of sample names
+  exp_search <- paste(exp_names, collapse = "|")
+  
+  # Get the scores for the samples
+  tib_plot <- input_tib %>%
+    dplyr::select(seqnames, start, end, 
+                  matches(exp_search))
+  
+  if (smooth > 1) {
+    tib_plot <- tib_plot %>%
+      mutate_at(vars(contains("_")), 
+                runmean, k = smooth)
+  }
+  
+  # Filter for plotting window
+  tib_plot <- tib_plot %>%
+    filter(seqnames == plot_chr,
+           start >= plot_start,
+           end <= plot_end)
+  
+  # Gather
+  tib_gather <- tib_plot %>%
+    gather(key, value, -seqnames, -start, -end) %>%
+    mutate(key = factor(key, levels = exp_names),
+           fill_column = color_groups[match(key, names(color_groups))],
+           fill_column = factor(fill_column, levels = unique(color_groups)))
+  
+  
+  # Centromeres
+  centromeres.plt <- as_tibble(centromeres) %>%
+    filter(seqnames == plot_chr) %>%
+    gather(key_centromeres, value, start, end)
+  
+  # Plot
+  ylimits <- quantile(tib_gather$value, c(0.001, 0.999), na.rm = T)
+  fill_column <- NULL
+  
+  plt <- tib_gather %>% 
+    ggplot(aes(fill = fill_column))
+  
+  
+  # Set all counts tracks to the same limits
+  plt <- plt + 
+    geom_rect(aes(xmin = start / 1e6, xmax = end / 1e6, 
+                  ymin = 0, ymax = value)) +
+    geom_line(data = centromeres.plt, 
+              aes(x = value / 1e6, y = 0),
+              color = "black", size = 2) +
+    geom_hline(yintercept = 0, size = 0.5) +
+    facet_grid(key ~ ., scales = "free_y") +
+    xlab(paste0(plot_chr, " (Mb)")) +
+    ylab("Score") +
+    scale_x_continuous(expand = c(0, 0)) + 
+    scale_y_continuous(expand = c(0.025, 0.025)) +
+    theme_classic()
+  
+  if (! is.null(color_list)) {
+    colors <- levels(tib_gather$fill_column)
+
+    color_list <- color_list[1:length(colors)]
+    names(color_list) <- colors
+    #colors <- recode(colors, !!!color_list)
+    
+    plt <- plt +
+      scale_fill_manual(values = color_list, guide = F)
+  } else {
+    plt <- plt +
+      scale_fill_brewer(palette = "Set1", guide = F)
+  }
+  
+  if (fix_yaxis) {
+    plt <- plt + 
+      coord_cartesian(xlim = c(max(c(plot_start,
+                                   min(tib_gather$start))) / 1e6,
+                             min(c(plot_end,
+                                   max(tib_gather$end))) / 1e6),
+                    ylim = ylimits)
+  } else {
+    plt <- plt + 
+      coord_cartesian(xlim = c(max(c(plot_start,
+                                   min(tib_gather$start))) / 1e6,
+                             min(c(plot_end,
+                                   max(tib_gather$end))) / 1e6))
+  }
+  
+  plot(plt)
+  
+}
+
+PlotDataTracksLight(input_tib = full_join(tib_padamid_combined,
+                                          tib_damid_combined), 
+                    exp_names = c("RPE_LMNB1",
+                                  "RPE_4xAP3",
+                                  "RPE_1h_Ki67",
+                                  "RPE_3h_Ki67",
+                                  "RPE_6h_Ki67",
+                                  "RPE_wt_Ki67"),
+                    centromeres,
+                    color_groups = c(RPE_LMNB1 = "LMNB1",
+                                     RPE_4xAP3 = "4xAP3",
+                                     RPE_1h_Ki67 = "Ki67",
+                                     RPE_3h_Ki67 = "Ki67",
+                                     RPE_6h_Ki67 = "Ki67",
+                                     RPE_wt_Ki67 = "Ki67"),
+                    smooth = 9, plot_chr = "chr1", fix_yaxis = F,
+                    color_list = colors_set1[c(1:3)])
+
+PlotDataTracksLight(input_tib = full_join(tib_padamid_combined,
+                                          tib_damid_combined), 
+                    exp_names = c("RPE_LMNB1",
+                                  "RPE_4xAP3",
+                                  "RPE_1h_Ki67",
+                                  "RPE_3h_Ki67",
+                                  "RPE_6h_Ki67",
+                                  "RPE_wt_Ki67"),
+                    centromeres,
+                    color_groups = c(RPE_LMNB1 = "LMNB1",
+                                     RPE_4xAP3 = "4xAP3",
+                                     RPE_1h_Ki67 = "Ki67",
+                                     RPE_3h_Ki67 = "Ki67",
+                                     RPE_6h_Ki67 = "Ki67",
+                                     RPE_wt_Ki67 = "Ki67"),
+                    smooth = 9, plot_chr = "chr2", fix_yaxis = F,
+                    color_list = colors_set1[c(1:3)])
+
+PlotDataTracksLight(input_tib = full_join(tib_padamid_combined,
+                                          tib_damid_combined), 
+                    exp_names = c("RPE_LMNB1",
+                                  "RPE_4xAP3",
+                                  "RPE_1h_Ki67",
+                                  "RPE_3h_Ki67",
+                                  "RPE_6h_Ki67",
+                                  "RPE_wt_Ki67"),
+                    centromeres,
+                    color_groups = c(RPE_LMNB1 = "LMNB1",
+                                     RPE_4xAP3 = "4xAP3",
+                                     RPE_1h_Ki67 = "Ki67",
+                                     RPE_3h_Ki67 = "Ki67",
+                                     RPE_6h_Ki67 = "Ki67",
+                                     RPE_wt_Ki67 = "Ki67"),
+                    smooth = 9, plot_chr = "chr4", fix_yaxis = F,
+                    color_list = colors_set1[c(1:3)])
+
+PlotDataTracksLight(input_tib = full_join(tib_padamid_combined,
+                                          tib_damid_combined), 
+                    exp_names = c("RPE_LMNB1",
+                                  "RPE_4xAP3",
+                                  "RPE_1h_Ki67",
+                                  "RPE_3h_Ki67",
+                                  "RPE_6h_Ki67",
+                                  "RPE_wt_Ki67"),
+                    centromeres,
+                    color_groups = c(RPE_LMNB1 = "LMNB1",
+                                     RPE_4xAP3 = "4xAP3",
+                                     RPE_1h_Ki67 = "Ki67",
+                                     RPE_3h_Ki67 = "Ki67",
+                                     RPE_6h_Ki67 = "Ki67",
+                                     RPE_wt_Ki67 = "Ki67"),
+                    smooth = 9, plot_chr = "chr11", fix_yaxis = F,
+                    color_list = colors_set1[c(1:3)])
+
+PlotDataTracksLight(input_tib = full_join(tib_padamid_combined,
+                                          tib_damid_combined), 
+                    exp_names = c("RPE_LMNB1",
+                                  "RPE_4xAP3",
+                                  "RPE_1h_Ki67",
+                                  "RPE_3h_Ki67",
+                                  "RPE_6h_Ki67",
+                                  "RPE_wt_Ki67"),
+                    centromeres,
+                    color_groups = c(RPE_LMNB1 = "LMNB1",
+                                     RPE_4xAP3 = "4xAP3",
+                                     RPE_1h_Ki67 = "Ki67",
+                                     RPE_3h_Ki67 = "Ki67",
+                                     RPE_6h_Ki67 = "Ki67",
+                                     RPE_wt_Ki67 = "Ki67"),
+                    smooth = 9, plot_chr = "chr13", fix_yaxis = F,
+                    color_list = colors_set1[c(1:3)])
+
+PlotDataTracksLight(input_tib = full_join(tib_padamid_combined,
+                                          tib_damid_combined), 
+                    exp_names = c("RPE_LMNB1",
+                                  "RPE_4xAP3",
+                                  "RPE_1h_Ki67",
+                                  "RPE_3h_Ki67",
+                                  "RPE_6h_Ki67",
+                                  "RPE_wt_Ki67"),
+                    centromeres,
+                    color_groups = c(RPE_LMNB1 = "LMNB1",
+                                     RPE_4xAP3 = "4xAP3",
+                                     RPE_1h_Ki67 = "Ki67",
+                                     RPE_3h_Ki67 = "Ki67",
+                                     RPE_6h_Ki67 = "Ki67",
+                                     RPE_wt_Ki67 = "Ki67"),
+                    smooth = 9, plot_chr = "chr22", fix_yaxis = F,
+                    color_list = colors_set1[c(1:3)])
+
+
+PlotDataTracksLight(input_tib = full_join(tib_padamid_combined,
+                                          tib_damid_combined), 
+                    exp_names = c("RPE_LMNB1",
+                                  "RPE_4xAP3",
+                                  "RPE_wt_Ki67",
+                                  "RPE_1h_Ki67",
+                                  "RPE_3h_Ki67",
+                                  "RPE_6h_Ki67",
+                                  "RPE_ActD_DMSO_Ki67",
+                                  "RPE_ActD_50ng_Ki67",
+                                  "RPE_Osm_0m_Ki67",
+                                  "RPE_Osm_30m_Ki67",
+                                  "RPE_Osm_180m_Ki67"),
+                    centromeres,
+                    color_groups = c(RPE_LMNB1 = "LMNB1",
+                                     RPE_4xAP3 = "4xAP3",
+                                     RPE_wt_Ki67 = "wt",
+                                     RPE_1h_Ki67 = "cell_cycle",
+                                     RPE_3h_Ki67 = "cell_cycle",
+                                     RPE_6h_Ki67 = "cell_cycle",
+                                     RPE_ActD_DMSO_Ki67 = "act",
+                                     RPE_ActD_50ng_Ki67 = "act",
+                                     RPE_Osm_0m_Ki67 = "osm",
+                                     RPE_Osm_30m_Ki67 = "osm",
+                                     RPE_Osm_180m_Ki67 = "osm"),
+                    smooth = 9, plot_chr = "chr2", fix_yaxis = F,
+                    color_list = colors_set1[c(1:5, 7)])
+
+PlotDataTracksLight(input_tib = full_join(tib_padamid_combined,
+                                          tib_damid_combined), 
+                    exp_names = c("RPE_LMNB1",
+                                  "RPE_4xAP3",
+                                  "RPE_wt_Ki67",
+                                  "RPE_1h_Ki67",
+                                  "RPE_3h_Ki67",
+                                  "RPE_6h_Ki67",
+                                  "RPE_ActD_DMSO_Ki67",
+                                  "RPE_ActD_50ng_Ki67",
+                                  "RPE_Osm_0m_Ki67",
+                                  "RPE_Osm_30m_Ki67",
+                                  "RPE_Osm_180m_Ki67"),
+                    centromeres,
+                    color_groups = c(RPE_LMNB1 = "LMNB1",
+                                     RPE_4xAP3 = "4xAP3",
+                                     RPE_wt_Ki67 = "wt",
+                                     RPE_1h_Ki67 = "cell_cycle",
+                                     RPE_3h_Ki67 = "cell_cycle",
+                                     RPE_6h_Ki67 = "cell_cycle",
+                                     RPE_ActD_DMSO_Ki67 = "act",
+                                     RPE_ActD_50ng_Ki67 = "act",
+                                     RPE_Osm_0m_Ki67 = "osm",
+                                     RPE_Osm_30m_Ki67 = "osm",
+                                     RPE_Osm_180m_Ki67 = "osm"),
+                    smooth = 9, plot_chr = "chr4", fix_yaxis = F,
+                    color_list = colors_set1[c(1:5, 7)])
+
+PlotDataTracksLight(input_tib = full_join(tib_padamid_combined,
+                                          tib_damid_combined), 
+                    exp_names = c("RPE_LMNB1",
+                                  "RPE_4xAP3",
+                                  "RPE_wt_Ki67",
+                                  "RPE_1h_Ki67",
+                                  "RPE_3h_Ki67",
+                                  "RPE_6h_Ki67",
+                                  "RPE_ActD_DMSO_Ki67",
+                                  "RPE_ActD_50ng_Ki67",
+                                  "RPE_Osm_0m_Ki67",
+                                  "RPE_Osm_30m_Ki67",
+                                  "RPE_Osm_180m_Ki67"),
+                    centromeres,
+                    color_groups = c(RPE_LMNB1 = "LMNB1",
+                                     RPE_4xAP3 = "4xAP3",
+                                     RPE_wt_Ki67 = "wt",
+                                     RPE_1h_Ki67 = "cell_cycle",
+                                     RPE_3h_Ki67 = "cell_cycle",
+                                     RPE_6h_Ki67 = "cell_cycle",
+                                     RPE_ActD_DMSO_Ki67 = "act",
+                                     RPE_ActD_50ng_Ki67 = "act",
+                                     RPE_Osm_0m_Ki67 = "osm",
+                                     RPE_Osm_30m_Ki67 = "osm",
+                                     RPE_Osm_180m_Ki67 = "osm"),
+                    smooth = 9, plot_chr = "chr6", fix_yaxis = F,
+                    color_list = colors_set1[c(1:5, 7)])
+
+PlotDataTracksLight(input_tib = full_join(tib_padamid_combined,
+                                          tib_damid_combined), 
+                    exp_names = c("RPE_wt_Ki67",
+                                  "RPE_1h_Ki67",
+                                  "RPE_3h_Ki67",
+                                  "RPE_6h_Ki67",
+                                  "RPE_Osm_30m_Ki67",
+                                  "RPE_Osm_180m_Ki67",
+                                  "RPE_ActD_DMSO_Ki67",
+                                  "RPE_ActD_50ng_Ki67",
+                                  "RPE_4xAP3"),
+                    centromeres,
+                    color_groups = c(RPE_wt_Ki67 = "wt",
+                                     RPE_1h_Ki67 = "cell_cycle",
+                                     RPE_3h_Ki67 = "cell_cycle",
+                                     RPE_6h_Ki67 = "cell_cycle",
+                                     RPE_Osm_30m_Ki67 = "osm",
+                                     RPE_Osm_180m_Ki67 = "osm",
+                                     RPE_ActD_DMSO_Ki67 = "act",
+                                     RPE_ActD_50ng_Ki67 = "act",
+                                     RPE_4xAP3 = "4xAP3"),
+                    smooth = 9, plot_chr = "chr2", fix_yaxis = F,
+                    color_list = colors_set1[c(1:5, 7)])
+
+PlotDataTracksLight(input_tib = full_join(tib_padamid_combined,
+                                          tib_damid_combined), 
+                    exp_names = c("RPE_wt_Ki67",
+                                  "RPE_1h_Ki67",
+                                  "RPE_3h_Ki67",
+                                  "RPE_6h_Ki67",
+                                  "RPE_Osm_30m_Ki67",
+                                  "RPE_Osm_180m_Ki67",
+                                  "RPE_ActD_DMSO_Ki67",
+                                  "RPE_ActD_50ng_Ki67",
+                                  "RPE_4xAP3"),
+                    centromeres,
+                    color_groups = c(RPE_wt_Ki67 = "wt",
+                                     RPE_1h_Ki67 = "cell_cycle",
+                                     RPE_3h_Ki67 = "cell_cycle",
+                                     RPE_6h_Ki67 = "cell_cycle",
+                                     RPE_Osm_30m_Ki67 = "osm",
+                                     RPE_Osm_180m_Ki67 = "osm",
+                                     RPE_ActD_DMSO_Ki67 = "act",
+                                     RPE_ActD_50ng_Ki67 = "act",
+                                     RPE_4xAP3 = "4xAP3"),
+                    smooth = 9, plot_chr = "chrX", fix_yaxis = F,
+                    color_list = colors_set1[c(1:5, 7)])
+
+# Without ActD
+PlotDataTracksLight(input_tib = full_join(tib_padamid_combined,
+                                          tib_damid_combined), 
+                    exp_names = c("RPE_wt_Ki67",
+                                  "RPE_1h_Ki67",
+                                  "RPE_3h_Ki67",
+                                  "RPE_6h_Ki67",
+                                  "RPE_Osm_30m_Ki67",
+                                  "RPE_Osm_180m_Ki67",
+                                  "RPE_4xAP3"),
+                    centromeres,
+                    color_groups = c(RPE_wt_Ki67 = "wt",
+                                     RPE_1h_Ki67 = "cell_cycle",
+                                     RPE_3h_Ki67 = "cell_cycle",
+                                     RPE_6h_Ki67 = "cell_cycle",
+                                     RPE_Osm_30m_Ki67 = "osm",
+                                     RPE_Osm_180m_Ki67 = "osm",
+                                     RPE_4xAP3 = "4xAP3"),
+                    smooth = 9, plot_chr = "chr2", fix_yaxis = F,
+                    color_list = colors_set1[c(1:5, 7)])
+
+PlotDataTracksLight(input_tib = full_join(tib_padamid_combined,
+                                          tib_damid_combined), 
+                    exp_names = c("RPE_wt_Ki67",
+                                  "RPE_1h_Ki67",
+                                  "RPE_3h_Ki67",
+                                  "RPE_6h_Ki67",
+                                  "RPE_Osm_30m_Ki67",
+                                  "RPE_Osm_180m_Ki67",
+                                  "RPE_4xAP3"),
+                    centromeres,
+                    color_groups = c(RPE_wt_Ki67 = "wt",
+                                     RPE_1h_Ki67 = "cell_cycle",
+                                     RPE_3h_Ki67 = "cell_cycle",
+                                     RPE_6h_Ki67 = "cell_cycle",
+                                     RPE_Osm_30m_Ki67 = "osm",
+                                     RPE_Osm_180m_Ki67 = "osm",
+                                     RPE_4xAP3 = "4xAP3"),
+                    smooth = 9, plot_chr = "chr2", fix_yaxis = T,
+                    color_list = colors_set1[c(1:5, 7)])
+
+
+
+```
+
+
+
+### Conclusions
+
+This was a good starting point for the analysis. I will continue with separate 
+documents for more detailed analyses.
+
+
+
+### Session info
+
+```{r save data, cache = T}
+
+# Save important data
+saveRDS(bin_size, file.path(output_dir, "bin_size.rds"))
+
+saveRDS(padamid_metadata_replicates, file.path(output_dir, "padamid_metadata_replicates.rds"))
+saveRDS(padamid_metadata_combined, file.path(output_dir, "padamid_metadata_combined.rds"))
+saveRDS(padamid_metadata_combined_replicates, file.path(output_dir, "padamid_metadata_combined_replicates.rds"))
+
+saveRDS(tib_padamid_replicates, file.path(output_dir, "tib_padamid_replicates.rds"))
+saveRDS(tib_padamid_replicates_scaled, file.path(output_dir, "tib_padamid_replicates_scaled.rds"))
+saveRDS(tib_padamid_combined, file.path(output_dir, "tib_padamid_combined.rds"))
+saveRDS(tib_padamid_combined_scaled, file.path(output_dir, "tib_padamid_combined_scaled.rds"))
+
+saveRDS(gr_padamid_replicates, file.path(output_dir, "gr_padamid_replicates.rds"))
+saveRDS(gr_padamid_combined, file.path(output_dir, "gr_padamid_combined.rds"))
+
+saveRDS(tib_hmm_replicates, file.path(output_dir, "tib_hmm_replicates.rds"))
+saveRDS(tib_hmm_combined, file.path(output_dir, "tib_hmm_combined.rds"))
+
+saveRDS(centromeres, file.path(output_dir, "centromeres.rds"))
+
+saveRDS(colors_set1, file.path(output_dir, "colors_set1.rds"))
+saveRDS(colors_set2, file.path(output_dir, "colors_set2.rds"))
+saveRDS(colors_set3, file.path(output_dir, "colors_set3.rds"))
+
+```
+
+```{r session info}
+sessionInfo()
+```
+

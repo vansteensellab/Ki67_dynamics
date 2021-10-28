@@ -1,0 +1,122 @@
+"""
+RNA-seq mapping workflow
+
+This workflow performs:
+
+ - Raw file QC with fastqc
+ - Read mapping with STAR (build index if required)
+ - Generate tracks (convert formats)
+ - Count table
+
+The parameters are specified in a YAML configuration file.
+
+Usage:
+
+    snakemake -p \
+      --snakefile /home/t.v.schaik/mydata/proj/3D_nucleus/results/ts210514_RNAseq_Ki67_depletion/Federico_workflow/ts210514_rnaseq.wf \
+      --configfile Federico_workflow/ts210514_config_read_mapping_rnaseq_PE.yaml \
+      --cores 24 --use-conda
+
+Author: Federico Comoglio; inspired by SnakeChunks
+Modified by: Tom
+(kudos to Claire Rioualen, Jacques van Helden et al.)
+"""
+
+#================================================================#
+# Python Imports
+
+# from snakemake.utils import R
+import os
+import sys
+import datetime
+import re
+import pandas as pd
+from pathlib import Path
+from os.path import join
+
+# include set of python functions for e.g. parsing metadata
+include: '/home/t.v.schaik/mydata/proj/3D_nucleus/results/ts210514_RNAseq_Ki67_depletion/Federico_workflow/util.py'
+
+#================================================================#
+# Validate parameters
+
+if not (('dir' in config.keys()) and ('fastq_dir' in config['dir'].keys())):
+    sys.exit("The parameter config['dir']['fastq_dir'] should be specified in the config file.")
+
+if not ('fastq_dir' in config['dir'].keys()):
+    sys.exit("The parameter config['dir']['fastq_dir'] should be specified in the config file.")
+else:
+    fastq_dir = config['dir']['fastq_dir']
+
+if not ('results' in config['dir'].keys()):
+    sys.exit("The parameter config['dir']['results'] should be specified in the config file.")
+else:
+    results_dir = config['dir']['results']
+
+#================================================================#
+# Variables & directories
+
+# Genome & annotations
+genome_dir        = config['dir']['genome']
+genome_fasta      = os.path.join(genome_dir, config['genome']['fasta_file'])
+gencode_annot     = os.path.join(genome_dir, config['genome']['gencode_annot'])
+chrom_sizes       = os.path.join(genome_dir, config['genome']['chrom_sizes'])
+
+# Results Directory
+res_dir           = config['dir']['results']
+
+# Log Directory
+log_dir           = config['dir']['logs']
+
+# STAR index directory
+star_index_dir    = config['genome']['star_index_dir']
+
+# sequencing type
+seq_type          = config['metadata']['seq_type']
+
+# mate suffix
+mate_suffix       = config['metadata']['mate_suffix'].split(',')
+
+# input file extension
+ext               = config['metadata']['input_format']
+
+# Wilcards
+# Sample identifiers = raw file name prefix (from metadata file)
+metadata = read_table(config['metadata']['samples'], header = 0, comment = "#")
+metadata.columns = ["sample.id", "fastq.files", "sample.names"]
+print(metadata)
+SAMPLE_IDS        = metadata['sample.id']
+# strip _mate
+SAMPLE_IDS        = [sid[:-len(mate_suffix[0])] for sid in SAMPLE_IDS]
+print(SAMPLE_IDS)
+
+#================================================================#
+# Snakemake rules
+
+# define directory containing snakemake rules
+RULES = config['dir']['snakerules']
+
+include: os.path.join(RULES, 'fastqc.rules')
+include: os.path.join(RULES, 'fastp.rules')
+include: os.path.join(RULES, 'star_index.rules')
+include: os.path.join(RULES, 'star_aln.rules')
+include: os.path.join(RULES, 'star_count_table.rules')
+
+#================================================================#
+# Rule all
+
+STAR_INDEX  = os.path.join(star_index_dir, 'SAindex')
+FASTQC_OUT  = expand(os.path.join(res_dir, 'FastQC/{sample}' + mate_suffix[0] + '_fastqc.html'), sample = SAMPLE_IDS)
+FASTP_OUT   = expand(os.path.join(res_dir, 'FastP/{sample}' + mate_suffix[0] + '_fastp.html'), sample = SAMPLE_IDS)
+STAR_OUT    = expand(os.path.join(res_dir, 'Star/{sample}_ReadsPerGene.out.tab'), sample = SAMPLE_IDS)
+COUNT_TABLE = os.path.join(res_dir, 'Star', config['star']['ct_prefix']) + '.tsv'
+
+rule all:
+    input:
+#        STAR_INDEX,
+        FASTQC_OUT,
+#        FASTP_OUT,
+        STAR_OUT,
+        COUNT_TABLE
+    params:
+	shell: "echo Job done `date '+%Y-%m-%d %H:%M'`"

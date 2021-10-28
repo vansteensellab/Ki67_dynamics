@@ -1,0 +1,13 @@
+---
+name: star
+channels:
+  - conda-forge
+  - bioconda
+  - r
+  - defaults
+dependencies:
+  - star=2.5.4a
+  - ucsc-bedgraphtobigwig
+  - bedtools=2.27.1
+  - ucsc-bedclip
+...

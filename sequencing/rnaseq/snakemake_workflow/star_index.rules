@@ -1,0 +1,37 @@
+# Validate parameters
+
+if not "genome" in config["dir"].keys():
+    sys.exit("Genome dir must be defined in the 'dir' section of the config file")
+
+if not "fasta_file" in config["genome"].keys():
+    sys.exit("Fasta file must be defined in the config file")
+
+if not "gencode_annot" in config["genome"].keys():
+    sys.exit("Gencode annotation (GTF) file must be defined in the config file")
+
+# Rule
+rule star_index:
+  """
+  Generate STAR index
+  Should run only once
+  Output file is used to test whether the index already exists before aligning
+  """
+    input:
+        genome = os.path.join(genome_dir, genome_fasta),
+        gtf    = os.path.join(genome_dir, gencode_annot)
+    output:
+        os.path.join(star_index_dir, 'SAindex')
+    params:
+        out_dir = star_index_dir
+    log:
+        os.path.join(star_index_dir, 'star_index.log')
+    conda:
+        '/home/f.comoglio/gitlab/smk-pip/envs/star.yaml'
+    threads: 24
+    shell:
+        """
+        mkdir -p {params.out_dir}
+
+        STAR --runMode genomeGenerate --runThreadN {threads} --outFileNamePrefix {params.out_dir} \
+        --genomeDir {params.out_dir} --genomeFastaFiles {input.genome} --sjdbGTFfile {input.gtf} --sjdbOverhang 100 2>{log}
+        """

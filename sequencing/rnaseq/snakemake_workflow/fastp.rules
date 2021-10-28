@@ -1,0 +1,58 @@
+# Set parameters
+
+if not "fastp" in config.keys():
+    config["fastp"] = {}
+
+if not "other_options" in config["fastp"].keys():
+    config["fastp"]["other_options"] = ""
+
+if not "input_format" in config["metadata"].keys():
+    config["metadata"]["input_format"] = "fastq"
+
+def get_fastp_input():
+    if(seq_type == 'se'):
+        reads = fastq_dir + '/' + '{sample}' + mate_suffix[0] + '.' + ext
+    else:
+        reads = [fastq_dir + '/' + '{sample}' + mate_suffix[0] + '.' + ext, fastq_dir + '/' + '{sample}' + mate_suffix[1] + '.' + ext]
+    return(reads)
+
+def get_fastp_output():
+    if(seq_type == 'se'):
+        trimmed = res_dir + '/FastP/' + '{sample}' + '_trim' + mate_suffix[0] + '.' + ext
+    else:
+        trimmed = [res_dir + '/FastP/' + '{sample}' + '_trim' + mate_suffix[0] + '.' + ext, res_dir + '/FastP/' + '{sample}' + '_trim' + mate_suffix[1] + '.' + ext]
+    return(trimmed)
+
+# Rule
+rule fastp:
+  """
+  Run fastp (quality filtering, detect and trim adapters)
+  Results are stored in FastP/
+  Custom parameters specified in the configuration file with the
+  option config["fastp"]["other_options"] will be passed to fastp.
+  """
+    input:
+        reads = get_fastp_input()
+    output:
+        trimmed = get_fastp_output()
+    params:
+        seq_type       = seq_type,
+        out_dir = os.path.join(res_dir, 'FastP'),
+        html_report = os.path.join(res_dir, 'FastP/{sample}' + '_fastp.html'),
+        json_report = os.path.join(res_dir, 'FastP/{sample}' + '_fastp.json'),
+        options = config["fastp"]["other_options"]
+    log:
+        os.path.join(log_dir, 'fastp/{sample}.log')
+    conda:
+        '/home/f.comoglio/gitlab/smk-pip/envs/fastp.yaml'
+    threads: 2
+    shell:
+        """
+        mkdir -p {params.out_dir}
+        if [ {params.seq_type} == 'se' ]
+        then
+            fastp -i {input.reads} -o {output.trimmed} --html {params.html_report} --json {params.json_report} -w {threads} &> {log}
+        else
+            fastp -i {input.reads[0]} -o {output.trimmed[0]} -I {input.reads[1]} -O {output.trimmed[1]} --html {params.html_report} --json {params.json_report} -w {threads} &> {log}
+        fi
+        """

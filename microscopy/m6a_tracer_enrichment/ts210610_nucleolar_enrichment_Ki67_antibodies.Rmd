@@ -1,0 +1,472 @@
+---
+title: "Intesity of m6A-Tracer around Ki67-marked nucleoli"
+author: "Tom van Schaik"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  html_document:
+    theme: journal #cerulean
+    highlight: monochrome
+    toc: true
+    toc_float: true
+    code_folding: show
+  editor_options:
+    chunk_output_type: console
+---
+
+
+### Introduction
+
+The goal of this analysis is to determine the enrichment of m6A-Tracer signal
+around nucleoli (marked by Ki67), following Ki67 pA-DamID. Dam-only signal is 
+the control.
+
+This particular document will focus on HCT116 Ki67 data, and include the two
+additional antibodies that I've tested.
+
+
+### Setup
+
+Load the required libraries.
+
+```{r setup, message = F, warning = F}
+
+# Load libraries
+library(ggplot2)
+library(tidyverse)
+library(ggbeeswarm)
+library(pixmap)
+
+# Input data
+results_dir <- c(#"../ts201008_E1304_E1321_confocal_various/ts201008_pADamID_m6ATracer_analysis/",
+                 #"../ts201102_E1349_confocal_synchronization/ts201102_RPE_m6ATracer/ts201102_RPE_timecourse_analysis/",
+                 #"../ts210308_E1499_confocal/ts210316_RPE_m6ATracer/ts210308_RPE_m6ATracer_analysis/",
+                 "../ts210402_E1546_confocal_Ki67_antibodies/ts210402_HCT116_wt_pADamID_Ki67_antibodies/ts210402_HCT116_wt_pADamID_Ki67_antibodies_analysis/")
+
+# Prepare output directory
+output_dir <- "ts210610_nucleolar_enrichment_Ki67_antibodies"
+dir.create(output_dir, showWarnings = FALSE)
+
+# Prepare output files
+
+```
+
+```{r knits setup}
+library(knitr)
+opts_chunk$set(dev=c('png', 'pdf'), fig.path = file.path(output_dir, "figures/"),
+               cache = T)
+pdf.options(useDingbats = FALSE)
+```
+
+```{r functions}
+
+ReadPGN <- function(file.name) {
+  
+  # Get image, only grey values
+  suppressWarnings(read.pnm(file.name)@grey*255)
+  
+}
+
+```
+
+
+### Strategy
+
+...
+
+
+### 1) Prepare metadata
+
+List the different samples.
+
+```{r prepare metadata}
+
+metadata <- tibble(cell_statistics = dir(results_dir, recursive = T, 
+                                         full.names = T,
+                                         pattern = "cells_statistics")) %>%
+  mutate(sample = str_remove(basename(cell_statistics),
+                             "_cells_.*")) %>%
+  filter(grepl("HCT116", sample)) %>%
+  filter(! grepl("Act", sample)) %>%
+  mutate(replicate = case_when(grepl("r1_", cell_statistics) ~ "r2",
+                               grepl("r2_", cell_statistics) ~ "r3",
+                               T ~ "r1"),
+         replicate = factor(replicate, levels = c("r1", "r2", "r3")),
+         cell = "HCT116",
+         condition = case_when(grepl("DMSO", cell_statistics) ~ "DMSO",
+                               T ~ "wt"),
+         target = case_when(grepl("Ki67", sample) ~ "Ki67", 
+                            grepl("HPA", sample) ~ "HPA", 
+                            grepl("NOV", sample) ~ "NOV", 
+                            T ~ "Dam"),
+         target = factor(target, levels = c("Dam", "Ki67", "HPA", "NOV")),
+         slide = str_remove(sample, ".*_")) %>%
+  mutate(sample = paste(cell, target, condition, replicate, slide, sep = "_")) %>%
+  mutate(objects = str_replace(cell_statistics, 
+                               "cells_statistics.csv",
+                               "dapi_segment.pgm"),
+         nucleolus_internal = str_replace(objects, 
+                                          "dapi_segment", 
+                                          "nucleolus_internal"),
+         nucleolus_external = str_replace(objects, 
+                                          "dapi_segment", 
+                                          "nucleolus_external"),
+         nucleolus = str_replace(objects, 
+                                 "dapi_segment", 
+                                 "nucleolus_smooth"),
+         tracer = str_replace(objects, 
+                              "dapi_segment", 
+                              "m6ATracer_smooth")) %>%
+  arrange(cell, target, condition, replicate, slide)
+
+# Print metadata
+metadata %>% 
+  print(n = Inf)
+
+```
+
+
+### 2) Load cell sizes and create a cell table
+
+Load the cells and show the sizes. Possibly filter on those.
+
+```{r load cells, message = F, warning = F}
+
+# Load all cells
+LoadCells <- function(i) {
+  tib <- read_csv(metadata$cell_statistics[i]) %>%
+    dplyr::select(c(1:2)) %>%
+    rename_all(~c("volume", "surface")) %>%
+    add_column(object = 1:nrow(.),
+               sample = metadata$sample[i],
+               replicate = metadata$replicate[i],
+               cell = metadata$cell[i],
+               condition = metadata$condition[i],
+               target = metadata$target[i],
+               slide = metadata$slide[i]) %>%
+    mutate(cell_id = paste(sample, object, sep = "_"))
+  
+  tib
+  
+}
+
+tib_cells <- lapply(1:nrow(metadata), LoadCells) %>%
+  purrr::reduce(bind_rows)
+
+```
+
+Plot and filter these cells.
+
+```{r plot cells, fig.width = 8, fig.height = 3.5}
+
+# Set size limits
+limits_size <- c(10, 150)
+
+# Plot cell volume
+tib_cells %>%
+  ggplot(aes(x = target, y = volume)) +
+  geom_hline(yintercept = 0, alpha = 0) +
+  geom_hline(yintercept = limits_size, col = "black", linetype = "dashed") +
+  geom_quasirandom(col = "darkgrey") +
+  geom_boxplot(fill = NA, col = "black", outlier.shape = NA) +
+  facet_grid(. ~ cell) +
+  xlab("") +
+  ylab("Volume slice (micron)") +
+  theme_bw() +
+  theme(aspect.ratio = 1,
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+# Filter cells for cutoff
+tib_cells <- tib_cells %>%
+  mutate(size_filter = volume >= limits_size[1] & 
+           volume <= limits_size[2])
+
+```
+
+
+### 3) Load the pgm maps
+
+Load the .pgm files for the various channels.
+
+```{r load pgm, message = F, warning = F}
+
+# Load all cells
+LoadPGMMaps <- function(i, n_min = 5) {
+  
+  # Load objects
+  objects <- ReadPGN(metadata$objects[i])
+  nucleolus <- ReadPGN(metadata$nucleolus[i])
+  nucleolus_internal <- ReadPGN(metadata$nucleolus_internal[i])
+  nucleolus_external <- ReadPGN(metadata$nucleolus_external[i])
+  tracer <- ReadPGN(metadata$tracer[i])
+  
+  tib <- tibble(object = c(objects),
+                nucleolus_internal = c(nucleolus_internal),
+                nucleolus_external = c(nucleolus_external),
+                nucleolus = c(nucleolus),
+                tracer = c(tracer)) %>%
+    filter(object != 0) %>%
+    rowwise() %>%
+    mutate(nucleolus_internal = min(nucleolus_internal, 254),
+           nucleolus_external = min(nucleolus_external, 254)) %>%
+    ungroup() %>%
+    group_by(object, nucleolus_internal, nucleolus_external) %>%
+    summarise(n = n(),
+              tracer = mean(tracer),
+              nucleolus = mean(nucleolus)) %>%
+    ungroup() %>%
+    group_by(object) %>%
+    mutate(tracer_enrichment = log2(tracer / weighted.mean(tracer, n)),
+           nucleolus_enrichment = log2(nucleolus / weighted.mean(nucleolus, n))) %>%
+    ungroup() %>%
+    filter(n > n_min) %>%
+    mutate(distance = nucleolus_external - nucleolus_internal) %>%
+    arrange(object, distance) %>%
+    add_column(sample = metadata$sample[i],
+               replicate = metadata$replicate[i],
+               cell = metadata$cell[i],
+               condition = metadata$condition[i],
+               target = metadata$target[i],
+               slide = metadata$slide[i]) %>%
+    mutate(cell_id = paste(sample, object, sep = "_"))
+  
+  tib
+  
+}
+
+tib_intensities <- lapply(1:nrow(metadata), LoadPGMMaps) %>%
+  purrr::reduce(bind_rows)
+
+# Filter out cells that did not pass the cell size filter
+tib_intensities <- tib_intensities %>%
+  dplyr::filter(cell_id %in% (tib_cells %>% 
+                                filter(size_filter == T) %>%
+                                pull(cell_id)))
+ 
+```
+
+Plots.
+
+```{r plot intensities, fig.width = 7, fig.height = 7}
+
+# Filter very bad cells
+# - only positive / negative scores
+# - extreme values
+remove_samples <- tib_intensities %>% 
+  gather(key, value, nucleolus_enrichment, tracer_enrichment) %>%
+  mutate(key = str_remove(key, "_enrichment")) %>%
+  filter(distance > -11 & distance <= 11) %>% 
+  group_by(key, target, cell, cell_id) %>% 
+  dplyr::summarise(q1 = quantile(value, 0.1), 
+                   q5 = quantile(value, 0.5), 
+                   q9 = quantile(value, 0.9)) %>%
+  filter(q1 > 0.5 | q9 < 0 | q1 < -2.5 | q9 > 3) %>%
+  pull(cell_id)
+
+
+# Plot intensity per cell
+tib_gather <- tib_intensities %>%
+  filter(! cell_id %in% remove_samples) %>%  
+  gather(key, value, nucleolus, tracer) %>%
+  filter(distance > -14 & distance <= 14) %>% 
+  mutate(key = factor(key, levels = c("tracer", "nucleolus")))
+
+tib_gather %>%  
+  ggplot(aes(x = distance, y = value, col = key, 
+             group = interaction(key, cell_id, condition))) +
+  geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+  geom_vline(xintercept = 0, col = "black", linetype = "dashed") +
+  geom_line() +
+  facet_grid(target ~ cell, scales = "free_y") +
+  xlab("Distance to nucleolus (pixel)") +
+  ylab("Intensity (A.U.)") +
+  coord_cartesian(xlim = c(-10, 10)) +
+  scale_color_grey() +
+  theme_bw() +
+  theme(aspect.ratio = 1,
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+# Plot intensity per cell - for enrichments
+tib_gather <- tib_intensities %>%
+  filter(! cell_id %in% remove_samples) %>%  
+  gather(key, value, nucleolus_enrichment, tracer_enrichment) %>%
+  filter(distance > -14 & distance <= 14) %>% 
+  mutate(key = str_remove(key, "_enrichment")) %>%
+  mutate(key = factor(key, levels = c("tracer", "nucleolus")))
+
+tib_gather %>%  
+  ggplot(aes(x = distance, y = value, col = key, 
+             fill = target, group = interaction(key, cell_id, condition))) +
+  geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+  geom_vline(xintercept = 0, col = "black", linetype = "dashed") +
+  geom_line(alpha = 0.1) +
+  stat_summary(fun = mean, aes(group = key), 
+               geom = "line", size = 2) +
+  facet_grid(cell ~ target, scales = "free_y") +
+  xlab("Distance to nucleolus (pixel)") +
+  ylab("Enrichment over mean (log2)") +
+  coord_cartesian(xlim = c(-10, 10),
+                  ylim = c(-2.1, 2.3)) +
+  scale_color_manual(values = c("grey30", "red")) +
+  theme_bw() +
+  theme(aspect.ratio = 1,
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+tib_gather %>%  
+  ggplot(aes(x = distance, y = value, col = target, 
+             fill = target, 
+             group = interaction(target, cell_id, condition))) +
+  geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+  geom_vline(xintercept = 0, col = "black", linetype = "dashed") +
+  geom_line(alpha = 0.1) +
+  stat_summary(fun = mean, aes(group = target), 
+               geom = "line", size = 2) +
+  # stat_summary(fun.data = mean_se, geom = "ribbon", aes(group = target),
+  #              fun.args = list(mult = 1.96), col = NA, alpha = 0.2) +
+  facet_grid(cell ~ key, scales = "free_y") +
+  xlab("Distance to nucleolus (pixel)") +
+  ylab("Enrichment over mean (log2)") +
+  coord_cartesian(xlim = c(-10, 10),
+                  ylim = c(-2.1, 2.3)) +
+  scale_color_manual(values = c("grey30", "red", 
+                                RColorBrewer::brewer.pal(3, "Set1")[2:3])) +
+  scale_fill_manual(values = c("grey30", "red", 
+                               RColorBrewer::brewer.pal(3, "Set1")[2:3])) +
+  theme_bw() +
+  theme(aspect.ratio = 1,
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+
+
+# # Means only
+# # 1) Combined
+# tib_gather %>%  
+#   ggplot(aes(x = distance, y = value, col = target, 
+#              fill = target, group = target)) +
+#   geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+#   geom_vline(xintercept = 0, col = "black", linetype = "dashed") +
+#   stat_summary(fun = mean, geom = "line", size = 1) +
+#   # stat_summary(fun.data = mean_se, geom = "errorbar",
+#   #              col = "darkgrey", linetype = "solid") +
+#   stat_summary(fun.data = mean_se, geom = "ribbon",
+#                col = NA, alpha = 0.2) +
+#   facet_grid(cell ~ key) +
+#   xlab("Distance to nucleolus (pixel)") +
+#   ylab("Enrichment over mean (log2)") +
+#   coord_cartesian(xlim = c(-10, 10),
+#                   ylim = c(-1.5, 1.9)) +
+#   #scale_color_grey() +
+#   theme_bw() +
+#   theme(aspect.ratio = 1,
+#         axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+# 
+# # 2) Per replicate
+# tib_gather %>%  
+#   ggplot(aes(x = distance, y = value, col = target, linetype = interaction(replicate, condition),
+#              fill = target, group = interaction(target, replicate, condition))) +
+#   geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+#   geom_vline(xintercept = 0, col = "black", linetype = "dashed") +
+#   stat_summary(fun = mean, geom = "line", size = 1) +
+#   # stat_summary(fun.data = mean_se, geom = "errorbar",
+#   #              col = "darkgrey", linetype = "solid") +
+#   stat_summary(fun.data = mean_se, geom = "ribbon",
+#                col = NA, alpha = 0.2) +
+#   facet_grid(cell ~ key) +
+#   xlab("Distance to nucleolus (pixel)") +
+#   ylab("Enrichment over mean (log2)") +
+#   coord_cartesian(xlim = c(-10, 10),
+#                   ylim = c(-1.5, 1.9)) +
+#   #scale_color_grey() +
+#   theme_bw() +
+#   theme(aspect.ratio = 1,
+#         axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+ 
+```
+
+```{r difference with dam, fig.width = 7, fig.height = 7}
+
+# Calculate means
+tib_summary <- tib_gather %>%
+  filter(distance > -12 & distance < 12) %>%
+  group_by(replicate, target, distance, key) %>%
+  dplyr::summarise(value = mean(value))
+
+# Plot the means
+tib_summary %>%  
+  ggplot(aes(x = distance, y = value, col = target, linetype = replicate,
+             fill = target, group = interaction(target, replicate))) +
+  geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+  geom_vline(xintercept = 0, col = "black", linetype = "dashed") +
+  geom_line() +
+  facet_grid(. ~ key) +
+  xlab("Distance to nucleolus (pixel)") +
+  ylab("Enrichment over mean (log2)") +
+  coord_cartesian(xlim = c(-10, 10),
+                  ylim = c(-1.5, 1.9)) +
+  theme_bw() +
+  theme(aspect.ratio = 1,
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+# Calculate enrichment over Dam
+tib_summary <- tib_summary %>%
+  spread(target, value) %>%
+  mutate(Ki67_diff = Ki67 - Dam,
+         HPA_diff = HPA - Dam,
+         NOV_diff = NOV - Dam) %>%
+  gather(target, value, contains("diff"))
+
+tib_summary %>%  
+  ggplot(aes(x = distance, y = value, col = target, linetype = replicate,
+             fill = target, group = interaction(target, replicate))) +
+  geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+  geom_vline(xintercept = 0, col = "black", linetype = "dashed") +
+  geom_line() +
+  facet_grid(. ~ key) +
+  xlab("Distance to nucleolus (pixel)") +
+  ylab("Difference in enrichment with Dam") +
+  coord_cartesian(xlim = c(-10, 10),
+                  ylim = c(-1.5, 1.9)) +
+  theme_bw() +
+  theme(aspect.ratio = 1,
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+```
+
+
+### Conclusion
+
+Several observations:
+
+  * Ki67 m6A-Tracer is enriched near Ki67 protein. That's good. Most clearly 
+    for Ki67-abcam, quite clear for the Novus antibody, not so clear for the HPA
+    antibody. Honestly, I don't know whether this is enrichment at all. 
+  * Similar to previously, I can see large between-slides differences. These are
+    at least partially "rescued" when I take the difference between antibody and 
+    Dam only. Clearly, I should carefully consider how I will present these 
+    data.
+  
+Overall, this is a positive result.
+
+
+### SessionInfo
+
+```{r sessionInfo}
+
+sessionInfo()
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,638 @@
+---
+title: "Gene expression processing"
+author: "Tom van Schaik"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output: 
+  html_document:
+    theme: journal #cerulean
+    highlight: monochrome
+    toc: true
+    toc_float: true
+    code_folding: show
+  editor_options:
+    chunk_output_type: console
+---
+
+
+### Project description
+
+Gene expression profiling of HCT116 cells after Ki67 depletion.
+
+
+### Introduction
+
+Basic differential expression analysis with DESeq2.
+
+
+### Method
+
+DESeq2.
+
+
+### Set-up
+
+Load the libraries and set the parameters.
+
+```{r set-up, message = F, warning = F}
+
+# Load dependencies
+library(tidyverse)
+library(GenomicRanges)
+library(rtracklayer)
+library(ggplot2)
+library(ggbeeswarm)
+library(DESeq2)
+library(RColorBrewer)
+library(GGally)
+
+# # Prepare output 
+output_dir <- "ts210514_rnaseq_processing"
+dir.create(output_dir, showWarnings = FALSE)
+
+
+# Centromere positioning
+input_dir <- "../ts200921_LaminaNucleolus_AdditionalExperiments/ts210413_data_gathering"
+centromeres <- readRDS(file.path(input_dir, "centromeres.rds"))
+
+```
+
+```{r knits setup}
+library(knitr)
+opts_chunk$set(fig.width = 10, fig.height = 4, cache = T,
+               dev=c('png', 'pdf'), fig.path = file.path(output_dir, "figures/")) 
+pdf.options(useDingbats = FALSE)
+```
+
+```{r functions}
+
+ExonLength <- function(genes) {
+  # Get the combined exon length for the genes
+  tib <- as_tibble(genes) %>%
+    filter(type == "exon") %>%
+    mutate(gene_id = factor(gene_id, levels = unique(gene_id))) %>%
+    group_by(gene_id) %>%
+    dplyr::summarise(exon_number = n(),
+              exon_length = sum(width))
+  
+  tib
+}
+
+# From Fede:
+# ggpairs custom functions
+corColor <- function(data, mapping, color = I("black"), sizeRange = c(1, 3), ...) {
+
+  x   <- eval_data_col(data, mapping$x)
+  y   <- eval_data_col(data, mapping$y)
+  r   <- cor(x, y)
+  rt  <- format(r, digits = 3)
+  tt  <- as.character(rt)
+  cex <- max(sizeRange)
+
+  # helper function to calculate a useable size
+  percent_of_range <- function(percent, range) {
+    percent * diff(range) + min(range, na.rm = TRUE)
+  }
+
+  # plot correlation coefficient
+  p <- ggally_text(label = tt, mapping = aes(), xP = 0.5, yP = 0.5,
+                   size = I(percent_of_range(cex * abs(r), sizeRange)), color = color, ...) +
+    theme(panel.grid.minor=element_blank(),
+          panel.grid.major=element_blank())
+
+  corColors <- RColorBrewer::brewer.pal(n = 7, name = "RdYlBu")[2:6]
+
+  if (r <= boundaries[1]) {
+    corCol <- corColors[1]
+  } else if (r <= boundaries[3]) {
+    corCol <- corColors[2]
+  } else if (r < boundaries[3]) {
+    corCol <- corColors[3]
+  } else if (r < boundaries[4]) {
+    corCol <- corColors[4]
+  } else {
+    corCol <- corColors[5]
+  }
+
+  p <- p +
+    theme(panel.background = element_rect(fill = corCol))
+
+  return(p)
+}
+
+plotMAWithLabels <- function(results, main, alpha = 0.05) {
+  
+  # Plot MA plot with lamin genes highlighted 
+  df <- DESeq2::plotMA(results, ylim = c(-4, 4), main = main,
+                       ylab = "log2 fold change", alpha = alpha, returnData = T)
+  
+  ggplot(df, aes(x = mean, y = lfc)) +
+    geom_bin2d(data = df[df$isDE == F, ], bins = 100) +
+    geom_point(data = df[df$isDE == T, ], aes(col = T), 
+               size = 1, show.legend = T) +
+    geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+    xlab("Mean expression (cpm)") + 
+    ylab("Expression difference (log2)") +
+    scale_x_log10() +
+    scale_color_manual(values = c("red"), name = "Significant") +
+    scale_fill_gradient(low = "lightgrey", high = "black", name = "Count") +
+    # coord_cartesian(ylim = c(-4, 4),
+    #                 xlim = c(1, max(df$mean, na.rm = T))) +
+    coord_cartesian(ylim = c(-4, 4)) +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+  
+  #points(results[c("ENSG00000148773"), "baseMean"],
+  #       results[c("ENSG00000148773"), "log2FoldChange"],
+  #       col = c("red"), cex = 1.5, pch = 19)
+  #legend("topright", 
+  #       legend = c(paste0("non-sign (n=", sum(results$padj >= alpha, na.rm = T), ")"), 
+  #                  paste0("sign (n=", sum(results$padj < alpha, na.rm = T), ")"), 
+  #                  "Ki67"), 
+  #       col = c("black", "blue", "red"), pch = 19)
+  
+}
+
+```
+
+
+### 1. Prepare data and DESeq2
+
+Read data files and initialize the DESeq2 object.
+
+
+```{r load rna-seq}
+
+#######################################
+## Prepare metadata
+
+# Prepare metadata sheet
+metadata <- read_tsv("ts210514_metadata_PE.tsv") %>%
+  filter(grepl("Ki67", sample_name)) %>%
+  dplyr::select(-fastq) %>%
+  #mutate(sample_id_short = str_remove(sample_id, "_R1_001")) %>%
+  separate(sample_name, c("cell", "clone", "condition", "replicate"), sep = "_", remove = F) %>%
+  mutate(condition = factor(condition, levels = unique(condition)),
+         replicate = factor(replicate, levels = unique(replicate)))
+
+
+#######################################
+## Prepare gene annotation
+
+# Load genes
+genes <- import("/home/t.v.schaik/mydata/data/gene_builds/GRCh38/gencode.v24.primary_assembly.annotation.gtf")
+
+# Get gene lengths (total exon length)
+gene_length <- ExonLength(genes)
+
+# dplyr::select genes only
+genes <- genes[genes$type == "gene"]
+
+# Add seqinfo
+# chrom_sizes <- read.table("/DATA/usr/t.v.schaik/data/genomes/GRCh38/hg38.chrom.sizes", sep = "\t")
+# row.names(chrom_sizes) <- chrom_sizes[, 1]
+# seqlengths(genes) <- chrom_sizes[seqlevels(genes), 2]
+
+
+
+#######################################
+## Prepare count matrix
+
+# Read count matrix corresponding to the metadata
+rnaseq_matrix <- read_tsv("results_pe/Star/count_table.tsv") %>%
+  dplyr::select(1, contains("Ki67")) %>%
+  rename_at(vars(names(.)), ~ c("ensembl_id", metadata$sample_name))
+
+# Filter for strange chromosomes
+idx_chromosome <- which(seqnames(genes) %in% c(paste0("chr", 1:22),
+                                               "chrX"))
+
+genes <- genes[idx_chromosome]
+rnaseq_matrix <- rnaseq_matrix[idx_chromosome, ]
+
+# Filter for protein coding genes (for now), and lincRNA (similar to 4DN analysis)
+filter <- c("protein_coding", "lincRNA")
+#filter <- c("protein_coding")
+idx_filter <- which(genes$gene_type %in% filter)
+
+genes <- genes[idx_filter]
+rnaseq_matrix <- rnaseq_matrix[idx_filter, ]
+
+# # Filter for genes with no counts
+# tib_nocounts <- rnaseq_matrix %>%
+#   mutate(ensembl_id = factor(ensembl_id, levels = ensembl_id)) %>%
+#   gather(key, value, -ensembl_id) %>%
+#   group_by(ensembl_id) %>%
+#   dplyr::summarise(count = sum(value > 2) > 2)
+# idx_nocounts <- which(tib_nocounts$count)
+# 
+# genes <- genes[idx_nocounts]
+# rnaseq_matrix <- rnaseq_matrix[idx_nocounts, ]
+
+```
+
+```{r centromere}
+
+# Add distance to centromere
+genes$distance_to_centromere <- as_tibble(distanceToNearest(genes, 
+                                                            centromeres,
+                                                            ignore.strand = T)) %>%
+  mutate(distance = distance / 1e6) %>%
+  pull(distance)
+
+```
+
+```{r initialize deseq2, fig.width = 6, fig.height = 3.5}
+
+#######################################
+## Prepare count matrix
+
+# Convert into data.frame with row.names for deseq2
+rnaseq_counts <- rnaseq_matrix %>%
+  dplyr::select(-ensembl_id)
+rnaseq_counts <- data.frame(rnaseq_counts, row.names = rnaseq_matrix$ensembl_id)
+
+
+#######################################
+## Initialize deseq2
+
+# Prepare metadata ready for deseq
+metadata_df <- data.frame(metadata)
+metadata_df[] <- lapply(metadata_df, function(x) gsub("-", "_", x))
+
+# Initialize
+rnaseq_dds <- DESeqDataSetFromMatrix(countData = rnaseq_counts,
+                                     colData = metadata_df,
+                                     design= ~ condition)
+
+# Execute deseq2
+rnaseq_dds <- DESeq(rnaseq_dds)
+
+
+#######################################
+## PCA analysis - quality control
+
+# Get the "normalized" values and create PCA plot
+# Note that "normalized" is simply log2 + 0.01 transformed normalized counts!
+rnaseq_dds_norm <- normTransform(rnaseq_dds, pc = 0.01)
+plt <- plotPCA(rnaseq_dds_norm, intgroup = c("sample_name"))
+
+plt + 
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+```
+
+The PCA plot looks a bit weird. I guess this is because there are no differences
+between the conditions.
+
+
+### 2. Correlation plot replicates
+
+A quick initial test: how well do the replicates correlate with each other and
+between the different experiments?
+
+```{r correlation plots, fig.width = 6, fig.height = 6, message = F, warning = F}
+
+#######################################
+## Make a correlation plot of all samples - quality control
+
+# Get the "normalized" counts for each experiment - this is a different
+# normalized from above!
+rnaseq_norm <- as_tibble(assay(rnaseq_dds_norm)) %>%
+  rename_at(vars(names(.)), ~ metadata$sample_name) %>%
+  add_column(ensembl_id = rnaseq_matrix$ensembl_id)
+
+# rnaseq_norm <- rnaseq_norm[, order(samples.df$clone)]
+
+
+# Also, combine the normalized counts
+rnaseq_norm_combined <- do.call(cbind,
+                                tapply(as.character(metadata$sample_name),
+                                       metadata$condition,
+                                       function(i) rowMeans(rnaseq_norm[, i])))
+
+tib_norm_combined <- as_tibble(rnaseq_norm_combined, 
+                               .name_repair = ~c("DMSO", "IAA")) %>%
+  add_column(gene_id = rnaseq_norm$ensembl_id)
+
+tib_norm_combined <- as_tibble(genes) %>%
+  dplyr::select(seqnames, start, end, strand, gene_id, gene_name) %>%
+  inner_join(tib_norm_combined, by = "gene_id")
+
+
+# Get a sample for plotting dplyr::select points
+n <- sample(1:nrow(rnaseq_norm), 1000)
+
+# Use GGally to make correlation plots
+boundaries <- seq(from = 0.9, by = 0.01, length.out = 4)
+plt <- ggpairs(rnaseq_norm %>% dplyr::select(-ensembl_id),
+               upper = list(continuous = corColor),
+               lower = list(continuous = function(data, mapping, ...) {
+                   ggally_points(data = data[n, ], mapping = mapping, alpha = 0.1, size = 0.5) +
+                   geom_abline(slope = 1, lty = "dashed", col = "red") +
+                   theme_bw()}),
+               diag = list(continuous = function(data, mapping, ...) {
+                   ggally_densityDiag(data = data, mapping = mapping, alpha = 0.3, fill = "red") +
+                   theme_bw()})) +
+  ggtitle("Correlation gene expression") +
+  xlab("Gene expression") +
+  ylab("Gene expression")
+  # theme_bw()
+
+print(plt)
+
+```
+
+The main point of the figure: there is no single replicate misbehaving.
+
+
+### 3. Differential analysis
+
+I will perform differential tests:
+
+  * IAA vs DMSO
+  
+```{r differential analysis, fig.width = 5.5, fig.height = 3.5}
+
+#######################################
+## Differential analysis - test for lfc > 0.5
+ 
+# Differential analysis
+diff_results <- results(rnaseq_dds, lfcThreshold = 0, alpha = 0.05,
+                       contrast = c("condition", "IAA", "DMSO"))
+summary(diff_results)
+
+
+# MA plots with significant hits
+plotMAWithLabels(diff_results, main = "")
+ 
+ 
+# Print differential genes
+as_tibble(diff_results) %>%
+  add_column(gene_id = row.names(diff_results)) %>%
+  filter(padj < 0.05) %>%
+  left_join(as_tibble(genes)) %>%
+  dplyr::select(gene_name, gene_id, baseMean, log2FoldChange, pvalue, padj, 
+                seqnames, start, end)
+
+# Quick question - are "mildly different changes" enriched near centromeres?
+as_tibble(diff_results) %>%
+  add_column(gene_id = row.names(diff_results)) %>%
+  left_join(as_tibble(genes)) %>%
+  dplyr::select(gene_name, gene_id, baseMean, log2FoldChange, pvalue, padj, 
+                seqnames, start, end, distance_to_centromere) %>%
+  ggplot(aes(x = pvalue < 0.05, y = distance_to_centromere, fill = pvalue < 0.05)) +
+  geom_boxplot(outlier.shape = NA) +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+```
+
+
+### 4. Overlap with LADs
+
+Finally, let's ask the important question: are the differentially regulated
+genes found within LADs? This would suggest that LAD disruption has an effect 
+on gene expression.
+
+```{r load LADs and determine gene overlap}
+
+#######################################
+## Load LADs
+
+# LADs: LAD definition in "wt" cells (clone 17)
+LADs <- import("/home/t.v.schaik/mydata/proj/3D_nucleus/results/ts200921_LaminaNucleolus_AdditionalExperiments/results/HMM/bin-50kb/HCT116_AID_ctrl_LMNB1-50kb-combined_AD.bed.gz")
+
+NADs <- import("/home/t.v.schaik/mydata/proj/3D_nucleus/results/ts200921_LaminaNucleolus_AdditionalExperiments/results/HMM/bin-50kb/HCT116_AID_ctrl_Ki67-50kb-combined_AD.bed.gz")
+
+
+#######################################
+## Determine overlap genes with LADs/NADs
+
+genes$overlaps_LAD <- overlapsAny(genes, LADs, type = "any")
+genes$overlaps_NAD <- overlapsAny(genes, NADs, type = "any")
+
+```
+
+Plot the enrichment of differential genes within LADs.
+
+```{r plot enrichment differential genes in LADs, fig.width = 5, fig.height = 3.5}
+
+#######################################
+## Create summarizing tibble - only using active genes
+
+tib <- as_tibble(diff_results) %>%
+  dplyr::select(baseMean, log2FoldChange, padj) %>%
+  add_column(ensembl_id = genes$gene_id,
+             overlaps_LAD = genes$overlaps_LAD,
+             overlaps_NAD = genes$overlaps_NAD) %>%
+  mutate(padj = replace_na(padj, 1))
+
+tib_gather <- tib %>%
+  dplyr::select(-starts_with("log")) %>%
+  gather(key, value, contains("overlaps")) %>%
+  mutate(sign = padj < 0.05)
+
+# Group by LAD overlap or significance
+tib_diff <- tib_gather %>%
+  group_by(key, value) %>%
+  dplyr::summarise(fraction = mean(sign),
+            total = sum(sign),
+            background = length(sign))
+
+#######################################
+## Plot results
+
+tib_diff %>%
+  ggplot(aes(x = key, y = fraction, fill = value)) +
+    geom_bar(stat = "identity", position = "dodge", col = "black") +
+    xlab("Knockout cells") +
+    ylab("Fraction differentially expressed") +
+    scale_fill_manual(values = c("grey", "black"), name = "Overlaps LAD") +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+
+tib_diff %>%
+  ggplot(aes(x = key, y = total, fill = value)) +
+    geom_bar(stat = "identity", position = "dodge", col = "black") +
+    xlab("Knockout cells") +
+    ylab("Total differentially expressed") +
+    scale_fill_manual(values = c("grey", "black"), name = "Overlaps LAD") +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+
+
+```
+
+Not significant.
+
+The analysis above is based on differential gene expression and simply asking 
+whether LAD genes are over-represented. However, there is a bias in gene 
+expression levels in LAD genes compared to iLAD genes: they often are more lowly
+expressed. It could that this bias also affects the result. To rule this out, 
+let's create a matched set (Christ's script) and use that.
+
+```{r repeat with matched set, fig.width = 5, fig.height = 3.5}
+
+## Function by Christ Leemans
+## Create a matched set
+##
+## get a table with matching sets
+## table = complete table to take matching sets from
+## class_col = column name of class of interest
+## class = name of class to match the set on
+## order_on = column name to order on
+## bs = bin size to sample equal number of items from
+matchSet <- function(table, class_col, class, order_on, bs=10){
+	# order by value of interest
+	o_vec = order(table[,order_on])
+	o_table = table[o_vec, ]
+	set_A = which(o_table[,class_col]==class)
+
+	# define bins that cover the range of set A
+	n = length(o_vec)
+	bin_n = floor((n - set_A[1] - 1) / bs)
+	seq_vec = seq(n-bin_n*bs, n, bs)
+
+	# take a matching set B
+	set_B = c()
+	for(i in 1:(length(seq_vec)-1)){
+	  sub_table = o_table[(seq_vec[i] + 1):seq_vec[i + 1], ]
+	  sub_A = which(sub_table[,class_col]==class)
+	  if (length(sub_A) < bs/2){
+	      sub_B = sample(which(sub_table[,class_col]!=class), length(sub_A))
+	  } else {
+	      sub_B = which(sub_table[,class_col]!=class)
+	  }
+	  set_B = c(set_B, sub_B + seq_vec[i])
+	}
+	## can also return o_table[c(setA, setB), ]
+	## but this way order is perserved.
+	i_vec = o_vec[c(set_A, set_B)]
+	return(table[i_vec[order(i_vec)], ])
+}
+
+tib_matched <- tibble()
+set.seed(123)
+for (i in 1:50) {
+  tmp <- matchSet(table = as.data.frame(tib), 
+                  class_col = "overlaps_LAD", 
+                  class = T, 
+                  order_on = "baseMean")
+  tmp <- as_tibble(tmp) %>%
+    mutate(match = i)
+  tib_matched <- bind_rows(tib_matched, tmp)
+}
+
+# tib_matched <- matchSet(table = as.data.frame(tib), 
+#                         class_col = "overlaps_LAD", 
+#                         class = T, 
+#                         order_on = "baseMean")
+# tib_matched <- as_tibble(tib_matched)
+
+# Check whether this worked
+tib %>% 
+  ggplot(aes(x = overlaps_LAD, y = log2(baseMean+1))) +
+  geom_violin(fill = "grey") +
+  theme_bw() +
+  theme(aspect.ratio = 2)
+
+tib_matched %>% 
+  ggplot(aes(x = overlaps_LAD, y = log2(baseMean+1))) +
+  geom_violin(fill = "grey") +
+  theme_bw() +
+  theme(aspect.ratio = 2)
+
+
+
+# Repeat enrichment plot
+tib_gather <- tib_matched %>%
+  dplyr::select(-starts_with("log")) %>%
+  gather(key, value, contains("overlaps")) %>%
+  mutate(sign = padj < 0.05)
+
+# Group by LAD overlap or significance
+tib_diff <- tib_gather %>%
+  group_by(key, value) %>%
+  dplyr::summarise(fraction = mean(sign),
+            total = sum(sign),
+            background = length(sign))
+
+#######################################
+## Plot results
+
+tib_diff %>%
+  ggplot(aes(x = key, y = fraction, fill = value)) +
+    geom_bar(stat = "identity", position = "dodge", col = "black") +
+    xlab("Knockout cells") +
+    ylab("Fraction differentially expressed") +
+    scale_fill_manual(values = c("grey", "black"), name = "Overlaps LAD") +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+
+tib_diff %>%
+  ggplot(aes(x = key, y = total, fill = value)) +
+    geom_bar(stat = "identity", position = "dodge", col = "black") +
+    xlab("Knockout cells") +
+    ylab("Total differentially expressed") +
+    scale_fill_manual(values = c("grey", "black"), name = "Overlaps LAD") +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+
+```
+
+Not significant.
+
+
+```{r calculate fpkm}
+
+# This is copied from the same file that I used to determine FPKM values for the
+# 4DN cell lines
+
+# Add this as metadata to the DESeq2 object
+mcols(rnaseq_dds)$basepairs <- gene_length %>%
+  filter(gene_id %in% genes$gene_id) %>%
+  pull("exon_length")
+
+# Get FPKM values
+rnaseq_fpkm <- as_tibble(fpkm(rnaseq_dds), rownames = "gene_id")
+
+# Get mean FPKM
+rnaseq_fpkm_mean <- rnaseq_fpkm %>%
+  gather(key, value, -gene_id) %>%
+  mutate(key = str_replace_all(key, "-", "_")) %>%
+  mutate(condition = metadata$condition[match(key, metadata$sample_name)]) %>%
+  group_by(condition, gene_id) %>%
+  summarise(mean_expr = mean(value, na.rm = T)) %>%
+  ungroup() %>% 
+  mutate(condition = paste0(condition, "_expr")) %>%
+  spread(condition, mean_expr) %>%
+  arrange(match(gene_id, genes$gene_id))
+
+
+```
+
+
+### Conclusion
+
+Ki67 depletion and the corresponding modest effects on genome organization have
+no effect on gene expression.
+
+
+### SessionInfo
+
+```{r save data}
+
+# Save data files for other documents
+saveRDS(genes, file.path(output_dir, "genes.rds"))
+saveRDS(diff_results, file.path(output_dir, "diff_results.rds"))
+saveRDS(rnaseq_fpkm_mean, file.path(output_dir, "genes_fpkm.rds"))
+saveRDS(metadata, file.path(output_dir, "metadata.rds"))
+
+```
+
+```{r sessioninfo}
+
+sessionInfo()
+
+```
