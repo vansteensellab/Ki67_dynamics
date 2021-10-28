@@ -1,1 +1,1 @@
-This GitHub page contains all scripts that were used for the Ki67 dynamics manuscript. These can be divided in scripts for microscopy data (image analysis) and for sequencing data (rna-seq, repli-seq, pa-damid).
+Data analysis of sequencing-based data is sub-divided based on the data type.
