@@ -6,7 +6,7 @@ Executed with snakemake 6.1.0. For most steps, the "conda_[...].yaml" files prov
 
 Not in R:
 
-  * conda install pandoc
+  * conda install pandoc (using bioconda)
 	
 In R:
 
