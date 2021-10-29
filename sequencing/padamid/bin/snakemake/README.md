@@ -11,7 +11,7 @@ Not in R:
 In R:
 
   * install.packages("optparse”)
-	* install.packages("GGally")
-	* install_github("js229/Vennerable") (using devtools)
-	* BiocManager::install(c("BSgenome", "GenomicAlignments", "Rsamtools", "Biostrings","SummarizedExperiment", "DelayedArray", "matrixStats", "Biobase", "rtracklayer", "GenomicRanges", "GenomeInfoDb", "IRanges", "S4Vectors", "BiocGenerics”)) (using bioconductor tools)
+  * install.packages("GGally")
+  * install_github("js229/Vennerable") (using devtools)
+  * BiocManager::install(c("BSgenome", "GenomicAlignments", "Rsamtools", "Biostrings","SummarizedExperiment", "DelayedArray", "matrixStats", "Biobase", "rtracklayer", "GenomicRanges", "GenomeInfoDb", "IRanges", "S4Vectors", "BiocGenerics”)) (using bioconductor tools)
 
