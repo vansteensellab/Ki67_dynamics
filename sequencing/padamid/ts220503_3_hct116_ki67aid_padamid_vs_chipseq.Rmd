@@ -1,0 +1,1240 @@
+---
+title: "4DN DamID - Ki67 project - pA-DamID vs ChIP-seq"
+author: "Tom van Schaik"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output: 
+  html_document:
+    theme: journal #cerulean
+    highlight: monochrome
+    toc: true
+    toc_float: true
+    code_folding: show
+  editor_options:
+    chunk_output_type: console
+---
+
+### Project
+
+Mapping of Ki67 interactions with the genome and comparison with lamina 
+interactions.
+
+
+### Introduction
+
+I generated lots of Ki-67 maps with pA-DamID. I would also argue that this
+method is especially suited for these purposes, given the strong normalization
+control, in situ methylation, etc. However, I never really showed this.
+
+NQ now helped me to generate Ki-67 ChIP-seq data. We did this in the HCT116
+cells with AID-tagged Ki-67, with and without auxin addition. I have 
+generated the same data with pA-DamID. Time to compare.
+
+
+### Method
+
+Various comparisons of the data.
+
+
+### Set-up
+
+Set the parameters and list the data.
+
+```{r set-up, warning = F, message = F, cache = T}
+
+# Load dependencies - without warnings / messages
+library(tidyverse)
+library(GenomicRanges)
+library(rtracklayer)
+library(ggplot2)
+library(RColorBrewer)
+library(GGally)
+library(corrr)
+library(caTools)
+library(colorspace)
+library(ggrastr)
+
+# Prepare output 
+output_dir <- "ts220503_3_hct116_ki67aid_padamid_vs_chipseq"
+dir.create(output_dir, showWarnings = FALSE)
+
+
+# Load input
+chromosomes <- c(paste0("chr", 1:22), "chrX")
+
+
+input_dir <- "ts220503_1_data_gathering"
+
+bin_size <- readRDS(file.path(input_dir, "bin_size.rds"))
+centromeres <- readRDS(file.path(input_dir, "centromeres.rds"))
+
+colors_set1 <- readRDS(file.path(input_dir, "colors_set1.rds"))
+colors_set2 <- readRDS(file.path(input_dir, "colors_set2.rds"))
+colors_set3 <- readRDS(file.path(input_dir, "colors_set3.rds"))
+
+# tib_padamid_replicates <- readRDS(file.path(input_dir, 
+#                                             "tib_padamid_replicates.rds"))
+# tib_padamid_combined <- readRDS(file.path(input_dir, 
+#                                           "tib_padamid_combined.rds"))
+# 
+# gr_padamid_replicates <- readRDS(file.path(input_dir, 
+#                                            "gr_padamid_replicates.rds"))
+gr_padamid_combined <- readRDS(file.path(input_dir,
+                                         "gr_padamid_combined.rds"))
+# 
+# tib_hmm_replicates <- readRDS(file.path(input_dir, "tib_hmm_replicates.rds"))
+# tib_hmm_combined <- readRDS(file.path(input_dir, "tib_hmm_combined.rds"))
+
+padamid_metadata_replicates <- readRDS(file.path(input_dir, 
+                                                 "padamid_metadata_replicates.rds"))
+# padamid_metadata_combined <- readRDS(file.path(input_dir, 
+#                                                "padamid_metadata_combined.rds"))
+
+
+
+# Prepare seqnames
+chrom_sizes <- tibble(seqnames = seqlevels(gr_padamid_combined),
+                      length = seqlengths(gr_padamid_combined)) %>%
+  arrange(-length)
+
+
+# # Scale pA-DamID scores?
+# tib_padamid_combined <- tib_padamid_combined %>%
+#   mutate_at(4:ncol(.), function(x) scale(x)[, 1]) %>%
+#   filter(seqnames != "chrY")
+
+```
+
+```{r knits setup}
+library(knitr)
+opts_chunk$set(fig.width = 10, fig.height = 4, cache = T,
+               dev=c('png', 'pdf'), fig.path = file.path(output_dir, "figures/")) 
+pdf.options(useDingbats = FALSE)
+```
+
+```{r functions}
+
+# From Fede:
+# ggpairs custom functions
+corColor <- function(data, mapping, color = I("black"), sizeRange = c(1, 3), ...) {
+
+  x   <- eval_data_col(data, mapping$x)
+  y   <- eval_data_col(data, mapping$y)
+  r   <- cor(x, y)
+  rt  <- format(r, digits = 3)
+  tt  <- as.character(rt)
+  cex <- max(sizeRange)
+
+  # helper function to calculate a useable size
+  percent_of_range <- function(percent, range) {
+    percent * diff(range) + min(range, na.rm = TRUE)
+  }
+
+  # plot correlation coefficient
+  p <- ggally_text(label = tt, mapping = aes(), xP = 0.5, yP = 0.5,
+                   # size = I(percent_of_range(cex * abs(r), sizeRange)), 
+                   size = 6, 
+                   color = color, ...) +
+    theme(panel.grid.minor=element_blank(),
+          panel.grid.major=element_blank())
+
+  corColors <- RColorBrewer::brewer.pal(n = 7, name = "RdYlBu")[2:6]
+
+  if (r <= boundaries[1]) {
+    corCol <- corColors[1]
+  } else if (r <= boundaries[2]) {
+    corCol <- corColors[2]
+  } else if (r < boundaries[3]) {
+    corCol <- corColors[3]
+  } else if (r < boundaries[4]) {
+    corCol <- corColors[4]
+  } else {
+    corCol <- corColors[5]
+  }
+
+  p <- p +
+    theme(panel.background = element_rect(fill = corCol))
+
+  return(p)
+}
+
+customScatter <- function (data, mapping) 
+{
+    p <- ggplot(data = data, mapping) + 
+      geom_bin2d(bins = 100) +
+      geom_smooth(method = "lm", se = T, col = "red") +
+      scale_fill_gradient(low = "lightgrey", high = "black", name = "Count") +
+      theme_bw()
+    
+    p 
+}
+
+PlotScatter <- function(tib, n1, n2, color_by = NULL, identity = F, smooth = 1) {
+  # Get tibble
+  tib <- tib %>%
+    dplyr::select(seqnames, matches(n1), matches(n2)) %>%
+    rename_all(~ c("seqnames", "n1", "n2"))
+  
+  if (smooth > 1) {
+    tib <- tib %>%
+      group_by(seqnames) %>%
+      mutate(n1 = runmean(n1, k = smooth),
+             n2 = runmean(n2, k = smooth))
+  }
+  
+  # Prepare color
+  if (! is.null(color_by)) {
+    tib <- tib %>%
+      add_column(color = color_by) %>%
+      drop_na()
+    alpha = 1
+    limits_color <- quantile(tib$color, c(0.001, 0.999), na.rm = T)
+    tib$color[tib$color < limits_color[1]] <- limits_color[1]
+    tib$color[tib$color > limits_color[2]] <- limits_color[2]
+  } else {
+    tib <- tib %>% drop_na()
+    tib$color = "1"
+    alpha = 0.02
+  }
+  
+  # Plot
+  xlimits <- quantile(tib$n1, c(0.001, 0.999), na.rm = T) * 1.4
+  ylimits <- quantile(tib$n2, c(0.001, 0.999), na.rm = T) * 1.4
+  
+  plt <- tib %>%
+    arrange(sample(1:nrow(.), size = nrow(.), replace = F)) %>%
+    ggplot(aes(x = n1, y = n2, color = color)) +
+    geom_point(size = 0.5, alpha = alpha) +
+    geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+    geom_vline(xintercept = 0, col = "black", linetype = "dashed") +
+    xlab(n1) +
+    ylab(n2) +
+    ggtitle(paste0("Spearman: ", 
+                   round(cor(tib$n1, tib$n2, use = "complete.obs",
+                             method = "spearman"), 2))) +
+    coord_cartesian(xlim = xlimits, ylim = ylimits) +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+  
+  # Prepare color
+  if (! is.null(color_by)) {
+    plt <- plt +
+      scale_color_gradient2(low = "blue", mid = "grey", high = "red",
+                            midpoint = 0)
+  } else {
+    plt <- plt + 
+      scale_color_manual(values = "black", guide = F)
+  }
+  if (identity) plt <- plt + geom_abline(slope = 1, intercept = 0, col = "red", linetype = "dashed")
+  
+  plot(plt)
+  
+}
+
+# Simple data track plotting with various options and "manual" control of 
+# colors
+PlotDataTracksLight <- function(input_tib, exp_names, centromeres, 
+                                color_groups, plot_chr = "chr1", 
+                                plot_start = 1, plot_end = 500e6,
+                                smooth = 1, color_list = NULL,
+                                fix_yaxis = F, aspect_ratio = NULL,
+                                lighten_negative = T, raster = T,
+                                ylimits = NULL) {
+  
+  # Get the scores for the samples
+  tib_plot <- input_tib %>%
+    dplyr::select(seqnames, start, end, 
+                  all_of(exp_names))
+  
+  if (smooth > 1) {
+    tib_plot <- tib_plot %>%
+      mutate_at(vars(contains("_")), 
+                runmean, k = smooth)
+  }
+  
+  # Filter for plotting window
+  tib_plot <- tib_plot %>%
+    filter(seqnames == plot_chr,
+           start >= plot_start,
+           end <= plot_end)
+  
+  # Gather
+  tib_gather <- tib_plot %>%
+    gather(key, value, -seqnames, -start, -end) %>%
+    mutate(key = factor(key, levels = exp_names),
+           fill_column = color_groups[match(key, names(color_groups))],
+           fill_column = factor(fill_column, levels = unique(color_groups)))
+  
+  # If desired, make negative values a lighter shade to improve visualization
+  if (lighten_negative) {
+    tib_gather <- tib_gather %>%
+      mutate(fill_column = interaction(fill_column,
+                                       value < 0))
+  }
+  
+  
+  # Centromeres
+  centromeres.plt <- as_tibble(centromeres) %>%
+    filter(seqnames == plot_chr) %>%
+    gather(key_centromeres, value, start, end)
+  
+  # Plot
+  if (is.null(ylimits)) {
+    ylimits <- quantile(tib_gather$value, c(0.001, 0.999), na.rm = T)
+  }
+  
+  fill_column <- NULL
+  
+  plt <- tib_gather %>% 
+    ggplot(aes(fill = fill_column))
+  
+  
+  # Set all counts tracks to the same limits
+  if (raster) {
+    plt <- plt + 
+      rasterize(geom_rect(aes(xmin = start / 1e6, xmax = end / 1e6, 
+                              ymin = 0, ymax = value)),
+                dpi = 300)
+  } else {
+    plt <- plt + 
+      geom_rect(aes(xmin = start / 1e6, xmax = end / 1e6, 
+                    ymin = 0, ymax = value))
+  }
+  
+  plt <- plt + 
+    geom_hline(yintercept = 0, size = 0.5) +
+    geom_line(data = centromeres.plt, 
+              aes(x = value / 1e6, y = 0),
+              color = "black", size = 2) +
+    facet_grid(key ~ ., scales = "free_y") +
+    xlab(paste0(plot_chr, " (Mb)")) +
+    ylab("Score") +
+    scale_x_continuous(expand = c(0, 0)) + 
+    scale_y_continuous(expand = c(0.025, 0.025)) +
+    theme_classic()
+  
+  if (! is.null(color_list)) {
+    
+    if (lighten_negative) {
+      color_list <- c(color_list,
+                      lighten(color_list, amount = 0.5))
+    }
+    
+    colors <- levels(tib_gather$fill_column)
+    
+    color_list <- color_list[1:length(colors)]
+    names(color_list) <- colors
+    #colors <- recode(colors, !!!color_list)
+    
+    plt <- plt +
+      scale_fill_manual(values = color_list, guide = "none")
+  } else {
+    plt <- plt +
+      scale_fill_brewer(palette = "Set1", guide = "none")
+  }
+  
+  if (fix_yaxis) {
+    plt <- plt + 
+      coord_cartesian(xlim = c(max(c(plot_start,
+                                     min(tib_gather$start))) / 1e6,
+                               min(c(plot_end,
+                                     max(tib_gather$end))) / 1e6),
+                      ylim = ylimits)
+  } else {
+    plt <- plt + 
+      coord_cartesian(xlim = c(max(c(plot_start,
+                                     min(tib_gather$start))) / 1e6,
+                               min(c(plot_end,
+                                     max(tib_gather$end))) / 1e6))
+  }
+  
+  if (! is.null(aspect_ratio)) {
+    plt <- plt +
+      theme(aspect.ratio = aspect_ratio)
+  }
+  
+  plot(plt)
+  
+}
+
+PlotScatterBinned <- function(tib, n1, n2, color_by = NULL, identity = F, 
+                              n_min = 10, ylimits_col = c(-2.4, 2.4),
+                              count_range = c(0, 400), smooth = 1,
+                              remove_outliers = F) {
+  # Get tibble
+  tib_process <- tib %>%
+    dplyr::select(seqnames, all_of(n1), all_of(n2)) %>%
+    rename_all(~ c("seqnames", "n1", "n2"))
+  
+  # Calculate pearson correlation without any smoothing
+  tib_cor <- round(cor(tib_process$n1, tib_process$n2, use = "complete.obs",
+                       method = "pearson"), 2)
+  
+  if (smooth > 1) {
+    tib_process <- tib_process %>%
+      group_by(seqnames) %>%
+      mutate(n1 = runmean(n1, k = smooth),
+             n2 = runmean(n2, k = smooth))
+  }
+  
+  
+  if (! is.null(color_by)) {
+    tib_process <- tib_process %>%
+      add_column(color = color_by)
+  }
+  
+  tib_process <- tib_process %>%
+    drop_na()
+  
+  # Change color range
+  if (! is.null(color_by)) {
+    limits_color <- quantile(tib_process$color, c(0.001, 0.999), na.rm = T)
+    tib_process$color[tib_process$color < limits_color[1]] <- limits_color[1]
+    tib_process$color[tib_process$color > limits_color[2]] <- limits_color[2]
+  }
+  
+  # Replace outliers
+  if (remove_outliers) {
+    tib_process <- tib_process %>%
+      mutate(n1 = case_when(n1 > quantile(n1, 0.999) ~ quantile(n1, 0.999),
+                            n1 < quantile(n1, 0.001) ~ quantile(n1, 0.001),
+                            T ~ n1),
+             n2 = case_when(n2 > quantile(n2, 0.999) ~ quantile(n2, 0.999),
+                            n2 < quantile(n2, 0.001) ~ quantile(n2, 0.001),
+                            T ~ n2))
+  }
+  
+  # Metrics
+  n1_min = min(tib_process$n1) - 0.001
+  n1_max = max(tib_process$n1) + 0.001
+  n1_binsize <- (n1_max - n1_min) / 49
+  
+  n2_min = min(tib_process$n2) - 0.001
+  n2_max = max(tib_process$n2) + 0.001
+  n2_binsize <- (n2_max - n2_min) / 49
+  
+  tib_summary <- tib_process %>%
+    mutate(n1_cut = cut(n1, 
+                        seq(n1_min, n1_max, length.out = 50)),
+           n2_cut = cut(n2, 
+                        seq(n2_min, n2_max, length.out = 50))) %>%
+    mutate(n1_bin = as.numeric(as.factor(n1_cut)),
+           n2_bin = as.numeric(as.factor(n2_cut))) %>%
+    mutate(n1_bin = n1_min - n1_binsize/2 + n1_bin * n1_binsize,
+           n2_bin = n2_min - n2_binsize/2 + n2_bin * n2_binsize) %>%
+    group_by(n1_bin, n2_bin)
+  
+  # Plot
+  if (! is.null(color_by)) {
+    tib_summary <- tib_summary %>%
+    dplyr::summarise(n = n(),
+                     mark = mean(color)) %>%
+    ungroup() %>%
+    filter(n >= n_min)
+    
+    plt <- tib_summary %>%
+      ggplot(aes(x = n1_bin, y = n2_bin)) +
+      geom_tile(aes(fill = mark)) +
+      scale_fill_gradient2(low = "blue", mid = "grey", high = "red",
+                           midpoint = 0, limits = ylimits_col, 
+                           na.value = "green")
+  } else {
+    tib_summary <- tib_summary %>%
+    dplyr::summarise(n = n()) %>%
+    ungroup() %>%
+    filter(n >= n_min)
+    
+    plt <- tib_summary %>%
+      ggplot(aes(x = n1_bin, y = n2_bin)) +
+      geom_tile(aes(fill = n)) +
+      scale_fill_gradient(low = "grey98", high = "black", name = "Count",
+                          limits = count_range, na.value = "green")
+  }
+  
+  plt <- plt + 
+    geom_hline(yintercept = 0, linetype = "dashed", col = "black") +
+    geom_vline(xintercept = 0, linetype = "dashed", col = "black") +
+    xlab(n1) +
+    ylab(n2) +
+    ggtitle(paste0("Pearson: ", tib_cor)) +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+  
+  if (identity) plt <- plt + geom_abline(slope = 1, intercept = 0, 
+                                         col = "black", linetype = "dashed")
+  
+  plot(plt)
+  
+}
+
+PlotDataTracksLightFaceted <- function(input_tib, exp_names, centromeres, 
+                                       color_groups, facet_groups,
+                                       plot_chr = "chr1", 
+                                       plot_start = 1, plot_end = 500e6,
+                                       smooth = 1, color_list = NULL,
+                                       fix_yaxis = F) {
+  
+  # Exp names is a vector of sample names
+  exp_search <- paste(exp_names, collapse = "|")
+  
+  # Get the scores for the samples
+  tib_plot <- input_tib %>%
+    dplyr::select(seqnames, start, end, 
+                  matches(exp_search))
+  
+  if (smooth > 1) {
+    tib_plot <- tib_plot %>%
+      mutate_at(vars(contains("_")), 
+                runmean, k = smooth)
+  }
+  
+  # Filter for plotting window
+  tib_plot <- tib_plot %>%
+    filter(seqnames == plot_chr,
+           start >= plot_start,
+           end <= plot_end)
+  
+  # Gather
+  tib_gather <- tib_plot %>%
+    gather(key, value, -seqnames, -start, -end) %>%
+    mutate(key = factor(key, levels = exp_names),
+           fill_column = color_groups[match(key, names(color_groups))],
+           fill_column = factor(fill_column, levels = unique(color_groups)),
+           facet_column = facet_groups[match(key, names(facet_groups))],
+           facet_column = factor(facet_column, levels = unique(facet_groups)))
+  
+  
+  # Centromeres
+  centromeres.plt <- as_tibble(centromeres) %>%
+    filter(seqnames == plot_chr) %>%
+    gather(key_centromeres, value, start, end)
+  
+  # Plot
+  ylimits <- quantile(tib_gather$value, c(0.001, 0.999), na.rm = T)
+  fill_column <- NULL
+  
+  plt <- tib_gather %>% 
+    ggplot(aes(fill = fill_column))
+  
+  
+  # Set all counts tracks to the same limits
+  plt <- plt + 
+    #geom_rect(aes(xmin = start / 1e6, xmax = end / 1e6, 
+    #              ymin = 0, ymax = value)) +
+    geom_line(aes(x = (start+end)/2e6, y = value,
+                  col = fill_column)) +
+    geom_line(data = centromeres.plt, 
+              aes(x = value / 1e6, y = 0),
+              color = "black", size = 2) +
+    geom_hline(yintercept = 0, size = 0.5) +
+    facet_grid(facet_column ~ ., scales = "free_y") +
+    xlab(paste0(plot_chr, " (Mb)")) +
+    ylab("Score") +
+    scale_x_continuous(expand = c(0, 0)) + 
+    scale_y_continuous(expand = c(0.025, 0.025)) +
+    theme_classic()
+  
+  if (! is.null(color_list)) {
+    colors <- levels(tib_gather$fill_column)
+    
+    color_list <- color_list[1:length(colors)]
+    names(color_list) <- colors
+    #colors <- recode(colors, !!!color_list)
+    
+    plt <- plt +
+      scale_fill_manual(values = color_list, guide = F) +
+      scale_color_manual(values = color_list, guide = F)
+  } else {
+    plt <- plt +
+      scale_fill_brewer(palette = "Set1", guide = F) +
+      scale_color_brewer(palette = "Set1", guide = F)
+  }
+  
+  if (fix_yaxis) {
+    plt <- plt + 
+      coord_cartesian(xlim = c(max(c(plot_start,
+                                     min(tib_gather$start))) / 1e6,
+                               min(c(plot_end,
+                                     max(tib_gather$end))) / 1e6),
+                      ylim = ylimits)
+  } else {
+    plt <- plt + 
+      coord_cartesian(xlim = c(max(c(plot_start,
+                                     min(tib_gather$start))) / 1e6,
+                               min(c(plot_end,
+                                     max(tib_gather$end))) / 1e6))
+  }
+  
+  plot(plt)
+  
+}
+
+# Function
+ExportBWFromTibble <- function(tib, bigwig_dir, column = "diff", name = NULL) {
+  
+  # Set name as column
+  if (is.null(name)) name <- column
+  
+  # Get GRanges from Tibble
+  gr <- tib %>%
+    dplyr::select(1:3, all_of(column)) %>%
+    drop_na() %>%
+    dplyr::rename_at(4, ~ "score") %>%
+    as(., "GRanges")
+  
+  # Exception: LADs and SPIN states
+  if (grepl("LAD", column)) {
+    gr$score <- ifelse(gr$score == "LAD", 1, 0)
+  }
+  
+  if (grepl("SPIN", column)) {
+    return(NULL)
+  }
+  
+  # Add chromosome information
+  seqlengths(gr) <- chrom_sizes$length[match(seqlevels(gr),
+                                             chrom_sizes$seqnames)]
+  
+  # Write bigwig
+  export.bw(object = gr,
+            con = file.path(bigwig_dir, paste0(name, ".bw")))
+  
+}
+
+BWsFromTibble <- function(tib) {
+  invisible(lapply(names(tib)[4:ncol(tib)],
+                   function(sample) {
+                     ExportBWFromTibble(tib,
+                                        bigwig_dir = bigwig_dir,
+                                        column = sample)
+                   }
+  ))
+}
+
+AddSuffix <- function(x, suffix, col_start = 4) {
+  x %>% rename_at(col_start:ncol(.),
+                  function(a) paste0(a, suffix))
+}
+
+# Prepare bigwigs - normalized 
+bigwig_dir <- file.path(output_dir, "bigwig")
+dir.create(bigwig_dir, showWarnings = F)
+
+
+```
+
+
+### 1. Load counts
+
+Instead of starting with the normalized values, I will start with the cpm
+normalized counts. This means that I can also compare the counts between
+time points (as will become clear later in this document).
+
+First pA-DamID.
+
+```{r load counts padamid}
+
+# First, get the metadata - do this mostly manually
+counts_dir <- file.path("results/tracks/counts/", 
+                        paste0("bin-", bin_size))
+
+metadata_padamid <- tibble(
+  sample = c("HCT116_AID_ctrl_r2_Ki67",
+             "HCT116_AID_ctrl_IAA_r2_Ki67",
+             "HCT116_AID_ctrl_r3_Ki67",
+             "HCT116_AID_ctrl_IAA_r3_Ki67")
+) %>%
+  mutate(dam = str_replace(sample, "Ki67", "Dam"),
+         replicate = ifelse(grepl("r2", sample),
+                            "r2", "r3"),
+         timepoint = ifelse(grepl("IAA", sample),
+                            "24h", "0h")) %>%
+  gather(target, sample, sample, dam) %>%
+  mutate(target = recode(target,
+                         sample = "Ki67",
+                         dam = "Dam")) %>%
+  mutate(file_sample = file.path(counts_dir,
+                                 paste0(sample,
+                                        "-",
+                                        bin_size,
+                                        ".bw")))
+
+# Read bigwig and combine
+tib_padamid_counts <- purrr::map(metadata_padamid$file_sample,
+                                 import.bw) %>%
+  purrr::map(as_tibble) %>%
+  purrr::imap(function(x, y) x %>% rename_at(6, ~ metadata_padamid$sample[y])) %>%
+  purrr::reduce(full_join) %>%
+  dplyr::select(-width, -strand)
+
+# Normalize
+tib_padamid_norm <- tib_padamid_counts %>%
+  mutate(HCT116_AID_ctrl_r2_Ki67 = 
+           log2((HCT116_AID_ctrl_r2_Ki67 + 1) / 
+                  (HCT116_AID_ctrl_r2_Dam + 1)),
+         HCT116_AID_ctrl_r3_Ki67 = 
+           log2((HCT116_AID_ctrl_r3_Ki67 + 1) / 
+                  (HCT116_AID_ctrl_r3_Dam + 1)),
+         HCT116_AID_ctrl_IAA_r2_Ki67 = 
+           log2((HCT116_AID_ctrl_IAA_r2_Ki67 + 1) / 
+                  (HCT116_AID_ctrl_IAA_r2_Dam + 1)),
+         HCT116_AID_ctrl_IAA_r3_Ki67 = 
+           log2((HCT116_AID_ctrl_IAA_r3_Ki67 + 1) / 
+                  (HCT116_AID_ctrl_IAA_r3_Dam + 1))) %>%
+  dplyr::select(-ends_with("Dam"))
+
+
+# Write bigwigs
+BWsFromTibble(tib_padamid_counts %>% AddSuffix("_padamid_counts"))
+BWsFromTibble(tib_padamid_norm %>% AddSuffix("_padamid_log2"))
+
+```
+
+Then ChIP-seq.
+
+```{r load counts chip}
+
+# First, get the metadata - do this mostly manually
+counts_dir <- "../ts210607_repliseq_K562_LaminKO_HCT116_Ki67AID/ts220210_further_processing_chipseq/bigwig_counts"
+
+metadata_chip <- tibble(
+  sample = c("HCT116_Ki67_0h",
+             "HCT116_Ki67_24h")
+) %>%
+  mutate(dam = str_replace(sample, "Ki67", "input"),
+         timepoint = ifelse(grepl("24h", sample),
+                            "24h", "0h")) %>%
+  gather(target, sample, sample, dam) %>%
+  mutate(target = recode(target,
+                         sample = "Ki67",
+                         dam = "Dam")) %>%
+  mutate(file_sample = file.path(counts_dir,
+                                 paste0(sample,
+                                        ".bw")))
+
+# Read bigwig and combine
+tib_chip_counts <- purrr::map(metadata_chip$file_sample,
+                                 import.bw) %>%
+  purrr::map(as_tibble) %>%
+  purrr::imap(function(x, y) x %>% rename_at(6, ~ metadata_chip$sample[y])) %>%
+  purrr::reduce(full_join) %>%
+  dplyr::select(-width, -strand)
+
+# Normalize
+tib_chip_norm <- tib_chip_counts %>%
+  mutate(HCT116_Ki67_0h = 
+           log2((HCT116_Ki67_0h + 1) / 
+                  (HCT116_input_0h + 1)),
+         HCT116_Ki67_24h = 
+           log2((HCT116_Ki67_24h + 1) / 
+                  (HCT116_input_24h + 1))) %>%
+  dplyr::select(-contains("input"))
+  
+
+# Write bigwigs
+BWsFromTibble(tib_chip_counts %>% AddSuffix("_chip_counts"))
+BWsFromTibble(tib_chip_norm %>% AddSuffix("_chip_log2"))
+
+```
+
+Repeat for mitotic ChIPs
+
+```{r load counts mitotic chip}
+
+# First, get the metadata - do this mostly manually
+mcounts_dir <- "../ts210607_repliseq_K562_LaminKO_HCT116_Ki67AID/ts220510_further_processing_chipseq/bigwig_counts"
+
+metadata_mitotic_chip <- tibble(
+  sample = c("mHCT116_Ki67_0h",
+             "mHCT116_Ki67_24h")
+) %>%
+  mutate(dam = str_replace(sample, "Ki67", "input"),
+         timepoint = ifelse(grepl("24h", sample),
+                            "24h", "0h")) %>%
+  gather(target, sample, sample, dam) %>%
+  mutate(target = recode(target,
+                         sample = "Ki67",
+                         dam = "Dam")) %>%
+  mutate(file_sample = file.path(mcounts_dir,
+                                 paste0(str_replace(sample, "mHCT116", "HCT116"),
+                                        ".bw")))
+
+# Read bigwig and combine
+tib_mchip_counts <- purrr::map(metadata_mitotic_chip$file_sample,
+                                 import.bw) %>%
+  purrr::map(as_tibble) %>%
+  purrr::imap(function(x, y) x %>% rename_at(6, ~ metadata_mitotic_chip$sample[y])) %>%
+  purrr::reduce(full_join) %>%
+  dplyr::select(-width, -strand)
+
+# Normalize
+tib_mchip_norm <- tib_mchip_counts %>%
+  mutate(mHCT116_Ki67_0h = 
+           log2((mHCT116_Ki67_0h + 1) / 
+                  (mHCT116_input_0h + 1)),
+         mHCT116_Ki67_24h = 
+           log2((mHCT116_Ki67_24h + 1) / 
+                  (mHCT116_input_24h + 1))) %>%
+  dplyr::select(-contains("input"))
+  
+
+# Write bigwigs
+BWsFromTibble(tib_mchip_counts %>% AddSuffix("_chip_counts"))
+BWsFromTibble(tib_mchip_norm %>% AddSuffix("_chip_log2"))
+
+```
+
+
+
+### 2. Determine difference over time
+
+I previously observed that the ChIP-seq data itself does not correlate with the 
+pA-DamID data. However, the difference in ChIP-seq data does correlate with the
+difference in pA-DamID signals, AND with the initial pA-DamID data. Thus, this
+confirms that ChIP-seq is not a good method for this, but at the same time it
+verifies the pA-DamID data. Perfect result?
+
+```{r difference over time}
+
+# Compute difference over time
+# 1) In normalized scores
+tib_padamid_diff <- tib_padamid_norm %>%
+  mutate(padamid_diff_r2 = HCT116_AID_ctrl_r2_Ki67 - HCT116_AID_ctrl_IAA_r2_Ki67,
+         padamid_diff_r3 = HCT116_AID_ctrl_r3_Ki67 - HCT116_AID_ctrl_IAA_r3_Ki67) %>%
+  rowwise() %>%
+  mutate(padamid_diff = (padamid_diff_r2 + padamid_diff_r3)/2) %>%
+  ungroup()
+
+tib_chip_diff <- tib_chip_norm %>%
+  mutate(chip_diff = HCT116_Ki67_0h - HCT116_Ki67_24h)
+
+tib_mchip_diff <- tib_mchip_norm %>%
+  mutate(mchip_diff = mHCT116_Ki67_0h - mHCT116_Ki67_24h)
+
+tib_diff_combined <- purrr::reduce(list(tib_padamid_diff,
+                                        tib_chip_diff,
+                                        tib_mchip_diff),
+                                   full_join)
+
+# Write bigwigs
+BWsFromTibble(tib_diff_combined %>% 
+                dplyr::select(seqnames, start, end,
+                              contains("diff")))
+
+```
+
+Yes, the tracks look really good.
+
+
+### 3. Determine difference in counts
+
+To better understand this, I will also determine the ratio in counts between the 
+time points. Is this effect because of a change in Ki-67 binding, in DNA 
+accessibility or a combination of the two?
+
+```{r ratio between counts}
+
+# 1) pA-DamID - compute difference over time between counts
+tib_padamid_counts_diff <- tib_padamid_counts %>%
+  mutate(HCT116_AID_ctrl_r2_Ki67 = 
+           log2((HCT116_AID_ctrl_r2_Ki67 + 1) / 
+                  (HCT116_AID_ctrl_IAA_r2_Ki67 + 1)),
+         HCT116_AID_ctrl_r2_Dam = 
+           log2((HCT116_AID_ctrl_r2_Dam + 1) / 
+                  (HCT116_AID_ctrl_IAA_r2_Dam + 1)),
+         HCT116_AID_ctrl_r3_Ki67 = 
+           log2((HCT116_AID_ctrl_r3_Ki67 + 1) / 
+                  (HCT116_AID_ctrl_IAA_r3_Ki67 + 1)),
+         HCT116_AID_ctrl_r3_Dam = 
+           log2((HCT116_AID_ctrl_r3_Dam + 1) / 
+                  (HCT116_AID_ctrl_IAA_r3_Dam + 1))) %>%
+  rowwise() %>%
+  mutate(HCT116_AID_ctrl_Ki67 = (HCT116_AID_ctrl_r2_Ki67 + 
+                                   HCT116_AID_ctrl_r3_Ki67)/2,
+         HCT116_AID_ctrl_Dam = (HCT116_AID_ctrl_r2_Dam + 
+                                   HCT116_AID_ctrl_r3_Dam)/2) %>%
+  ungroup() %>%
+  dplyr::select(-contains("IAA"))
+
+# Write bigwigs
+BWsFromTibble(tib_padamid_counts_diff %>% AddSuffix("_countsdiff"))
+
+
+# 2) ChIP - compute difference over time between counts
+tib_chip_counts_diff <- tib_chip_counts %>%
+  mutate(HCT116_Ki67_0h = 
+           log2((HCT116_Ki67_0h + 1) / 
+                  (HCT116_Ki67_24h + 1)),
+         HCT116_input_0h = 
+           log2((HCT116_input_0h + 1) / 
+                  (HCT116_input_24h + 1))) %>%
+  dplyr::select(-contains("24"))
+
+# Write bigwigs
+BWsFromTibble(tib_chip_counts_diff %>% AddSuffix("_countsdiff"))
+
+
+# 3) mChIP - compute difference over time between counts
+tib_mchip_counts_diff <- tib_mchip_counts %>%
+  mutate(mHCT116_Ki67_0h = 
+           log2((mHCT116_Ki67_0h + 1) / 
+                  (mHCT116_Ki67_24h + 1)),
+         mHCT116_input_0h = 
+           log2((mHCT116_input_0h + 1) / 
+                  (mHCT116_input_24h + 1))) %>%
+  dplyr::select(-contains("24"))
+
+# Write bigwigs
+BWsFromTibble(tib_mchip_counts_diff %>% AddSuffix("_mcountsdiff"))
+
+```
+
+This confirms that a change in DNA accessibility is not causing the difference 
+over time. I'm now confident that the ChIP-seq data recapitulates the pA-DamID
+data.
+
+Finally, I need to prepare some figures to illustrate this.
+
+
+### 4. Example tracks
+
+First, show some example tracks.
+
+```{r example tracks, fig.width = 5.5, fig.height = 8}
+
+# Combine all the data
+tib_combined <- purrr::reduce(list(
+  tib_padamid_counts %>% AddSuffix("_padamid_counts"), 
+  tib_padamid_norm %>% AddSuffix("_padamid_norm"), 
+  tib_padamid_counts_diff %>% AddSuffix("_padamid_countsdiff"), 
+  tib_chip_counts %>% AddSuffix("_chip_counts"), 
+  tib_chip_norm %>% AddSuffix("_chip_norm"), 
+  tib_chip_counts_diff %>% AddSuffix("_chip_countsdiff"), 
+  tib_mchip_counts %>% AddSuffix("_mchip_counts"), 
+  tib_mchip_norm %>% AddSuffix("_mchip_norm"), 
+  tib_mchip_counts_diff %>% AddSuffix("_mchip_countsdiff"), 
+  tib_diff_combined %>% dplyr::select(seqnames, start, 
+                                      contains("diff"))
+),
+full_join)
+
+
+#######################################
+### Normalization
+
+# pA-DamID normalization
+PlotDataTracksLight(input_tib = tib_combined, 
+                    exp_names = c("HCT116_AID_ctrl_r2_Ki67_padamid_counts",
+                                  "HCT116_AID_ctrl_r2_Dam_padamid_counts",
+                                  "HCT116_AID_ctrl_r2_Ki67_padamid_norm"),
+                    centromeres,
+                    color_groups = c(HCT116_AID_ctrl_r2_Ki67_padamid_counts = "Ki67",
+                                     HCT116_AID_ctrl_r2_Dam_padamid_counts = "Dam",
+                                     HCT116_AID_ctrl_r2_Ki67_padamid_norm = "Ki67"), 
+                    plot_chr = "chr11", 
+                    smooth = 9, fix_yaxis = F, aspect_ratio = 1/5,
+                    color_list = c(colors_set1[1], "grey50"))
+
+# ChIP-seq normalization
+PlotDataTracksLight(input_tib = tib_combined, 
+                    exp_names = c("HCT116_Ki67_0h_chip_counts",
+                                  "HCT116_input_0h_chip_counts",
+                                  "HCT116_Ki67_0h_chip_norm"),
+                    centromeres,
+                    color_groups = c(HCT116_Ki67_0h_chip_counts = "Ki67",
+                                     HCT116_input_0h_chip_counts = "Dam",
+                                     HCT116_Ki67_0h_chip_norm = "Ki67"),
+                    plot_chr = "chr11",  
+                    smooth = 9, fix_yaxis = F, aspect_ratio = 1/5,
+                    color_list = c(colors_set1[2], "grey50"))
+
+
+#######################################
+### Comparison of normalized data
+
+# pA-DamID versus ChIP-seq
+PlotDataTracksLight(input_tib = tib_combined, 
+                    exp_names = c("HCT116_AID_ctrl_r2_Ki67_padamid_norm",
+                                  "HCT116_AID_ctrl_r3_Ki67_padamid_norm",
+                                  "HCT116_Ki67_0h_chip_norm"),
+                    centromeres,
+                    color_groups = c(HCT116_AID_ctrl_r2_Ki67_padamid_norm = "padamid",
+                                     HCT116_AID_ctrl_r3_Ki67_padamid_norm = "padamid",
+                                     HCT116_Ki67_0h_chip_norm = "chip"),
+                    plot_chr = "chr11", 
+                    smooth = 9, fix_yaxis = F, aspect_ratio = 1/5,
+                    color_list = c(colors_set1[1], colors_set1[2]))
+ 
+# Control versus IAA
+PlotDataTracksLight(input_tib = tib_combined, 
+                    exp_names = c("HCT116_AID_ctrl_r2_Ki67_padamid_norm",
+                                  "HCT116_AID_ctrl_IAA_r2_Ki67_padamid_norm",
+                                  "HCT116_Ki67_0h_chip_norm",
+                                  "HCT116_Ki67_24h_chip_norm"),
+                    centromeres,
+                    color_groups = c(HCT116_AID_ctrl_r2_Ki67_padamid_norm = "padamid",
+                                     HCT116_AID_ctrl_IAA_r2_Ki67_padamid_norm = "padamid",
+                                     HCT116_Ki67_0h_chip_norm = "chip",
+                                     HCT116_Ki67_24h_chip_norm = "chip"),
+                    plot_chr = "chr11", 
+                    smooth = 9, fix_yaxis = F, aspect_ratio = 1/5,
+                    color_list = c(colors_set1[1], colors_set1[2]))
+
+# Control versus IAA - with differences
+PlotDataTracksLight(input_tib = tib_combined, 
+                    exp_names = c("HCT116_AID_ctrl_r2_Ki67_padamid_norm",
+                                  "HCT116_AID_ctrl_IAA_r2_Ki67_padamid_norm",
+                                  "padamid_diff_r2",
+                                  "HCT116_Ki67_0h_chip_norm",
+                                  "HCT116_Ki67_24h_chip_norm",
+                                  "chip_diff"),
+                    centromeres,
+                    color_groups = c(HCT116_AID_ctrl_r2_Ki67_padamid_norm = "padamid",
+                                     HCT116_AID_ctrl_IAA_r2_Ki67_padamid_norm = "padamid",
+                                     padamid_diff_r2 = "diff",
+                                     HCT116_Ki67_0h_chip_norm = "chip",
+                                     HCT116_Ki67_24h_chip_norm = "chip",
+                                     chip_diff = "diff"),
+                    plot_chr = "chr11", 
+                    smooth = 9, fix_yaxis = F, aspect_ratio = 1/5,
+                    color_list = c(colors_set1[1], "grey50", colors_set1[2]))
+
+
+#######################################
+### Comparison of counts ratios
+
+# Control versus IAA
+PlotDataTracksLight(input_tib = tib_combined, 
+                    exp_names = c("HCT116_AID_ctrl_r2_Ki67_padamid_norm",
+                                  "HCT116_AID_ctrl_r2_Dam_padamid_countsdiff",
+                                  "HCT116_AID_ctrl_r2_Ki67_padamid_countsdiff",
+                                  "HCT116_Ki67_0h_chip_norm",
+                                  "HCT116_input_0h_chip_countsdiff",
+                                  "HCT116_Ki67_0h_chip_countsdiff"),
+                    centromeres,
+                    color_groups = c(HCT116_AID_ctrl_r2_Ki67_padamid_norm = "padamid",
+                                     HCT116_AID_ctrl_r2_Dam_padamid_countsdiff = "diff",
+                                     HCT116_AID_ctrl_r2_Ki67_padamid_countsdiff = "diff",
+                                     HCT116_Ki67_0h_chip_norm = "chip",
+                                     HCT116_input_0h_chip_countsdiff = "diff",
+                                     HCT116_Ki67_0h_chip_countsdiff = "diff"),
+                    plot_chr = "chr11", 
+                    smooth = 9, fix_yaxis = F, aspect_ratio = 1/5,
+                    color_list = c(colors_set1[1], "grey50", colors_set1[2]))
+
+
+#######################################
+### Combined time course
+
+# pA-DamID
+PlotDataTracksLight(input_tib = tib_combined, 
+                    exp_names = c("HCT116_AID_ctrl_r2_Ki67_padamid_norm",
+                                  "HCT116_AID_ctrl_IAA_r2_Ki67_padamid_norm",
+                                  "padamid_diff_r2",
+                                  "HCT116_AID_ctrl_r2_Dam_padamid_countsdiff",
+                                  "HCT116_AID_ctrl_r2_Ki67_padamid_countsdiff"),
+                    centromeres,
+                    color_groups = c(HCT116_AID_ctrl_r2_Ki67_padamid_norm = "norm",
+                                     HCT116_AID_ctrl_IAA_r2_Ki67_padamid_norm = "norm",
+                                     padamid_diff_r2 = "diff_norm",
+                                     HCT116_AID_ctrl_r2_Dam_padamid_countsdiff = "diff_counts",
+                                     HCT116_AID_ctrl_r2_Ki67_padamid_countsdiff = "diff_counts"),
+                    plot_chr = "chr11", 
+                    smooth = 9, fix_yaxis = T, aspect_ratio = 1/5,
+                    color_list = c(colors_set1[1], "grey20", "grey50"))
+
+# ChIP-seq
+PlotDataTracksLight(input_tib = tib_combined, 
+                    exp_names = c("HCT116_Ki67_0h_chip_norm",
+                                  "HCT116_Ki67_24h_chip_norm",
+                                  "chip_diff",
+                                  "HCT116_input_0h_chip_countsdiff",
+                                  "HCT116_Ki67_0h_chip_countsdiff"),
+                    centromeres,
+                    color_groups = c(HCT116_Ki67_0h_chip_norm = "norm",
+                                     HCT116_Ki67_24h_chip_norm = "norm",
+                                     chip_diff = "diff_norm",
+                                     HCT116_input_0h_chip_countsdiff = "diff_counts",
+                                     HCT116_Ki67_0h_chip_countsdiff = "diff_counts"),
+                    plot_chr = "chr11", 
+                    smooth = 9, fix_yaxis = T, aspect_ratio = 1/5,
+                    color_list = c(colors_set1[2], "grey20", "grey50"))
+
+# Faceted plot
+PlotDataTracksLightFaceted(input_tib = tib_combined, 
+                           exp_names = c("padamid_diff",
+                                         "chip_diff"),
+                           centromeres,
+                           color_groups = c(padamid_diff = "padamid",
+                                            chip_diff = "chip"),
+                           plot_chr = "chr11", 
+                           facet_groups = c(padamid_diff = "diff",
+                                            chip_diff = "diff"),
+                           smooth = 51, fix_yaxis = F,
+                           color_list = c(colors_set1[c(1, 2)]))
+
+
+#######################################
+### Mitotic data
+
+# mitotic ChIP-seq
+PlotDataTracksLight(input_tib = tib_combined, 
+                    exp_names = c("mHCT116_Ki67_0h_mchip_norm",
+                                  "mHCT116_Ki67_24h_mchip_norm",
+                                  "mchip_diff"),
+                    centromeres,
+                    color_groups = c(mHCT116_Ki67_0h_mchip_norm = "norm",
+                                     mHCT116_Ki67_24h_mchip_norm = "norm",
+                                     mchip_diff = "diff_norm"),
+                    plot_chr = "chr2", ylimits = c(-0.4, 0.4),
+                    smooth = 9, fix_yaxis = T, aspect_ratio = 1/5,
+                    color_list = c(colors_set1[2], "grey20"))
+
+PlotDataTracksLight(input_tib = tib_combined, 
+                    exp_names = c("mHCT116_Ki67_0h_mchip_norm",
+                                  "mHCT116_Ki67_24h_mchip_norm",
+                                  "mchip_diff"),
+                    centromeres,
+                    color_groups = c(mHCT116_Ki67_0h_mchip_norm = "norm",
+                                     mHCT116_Ki67_24h_mchip_norm = "norm",
+                                     mchip_diff = "diff_norm"),
+                    plot_chr = "chr22", ylimits = c(-0.4, 0.4),
+                    smooth = 9, fix_yaxis = T, aspect_ratio = 1/5,
+                    color_list = c(colors_set1[2], "grey20"))
+
+# mitotic ChIP-seq with individual ratios
+PlotDataTracksLight(input_tib = tib_combined, 
+                    exp_names = c("mHCT116_Ki67_0h_mchip_norm",
+                                  "mHCT116_Ki67_24h_mchip_norm",
+                                  "mchip_diff",
+                                  "mHCT116_input_0h_mchip_countsdiff",
+                                  "mHCT116_Ki67_0h_mchip_countsdiff"),
+                    centromeres,
+                    color_groups = c(mHCT116_Ki67_0h_mchip_norm = "norm",
+                                     mHCT116_Ki67_24h_mchip_norm = "norm",
+                                     mchip_diff = "diff_norm",
+                                     mHCT116_input_0h_mchip_countsdiff = "diff_counts",
+                                     mHCT116_Ki67_0h_mchip_countsdiff = "diff_counts"),
+                    plot_chr = "chr2", 
+                    smooth = 9, fix_yaxis = T, aspect_ratio = 1/5,
+                    color_list = c(colors_set1[2], "grey20", "grey50"))
+
+PlotDataTracksLight(input_tib = tib_combined, 
+                    exp_names = c("mHCT116_Ki67_0h_mchip_norm",
+                                  "mHCT116_Ki67_24h_mchip_norm",
+                                  "mchip_diff",
+                                  "mHCT116_input_0h_mchip_countsdiff",
+                                  "mHCT116_Ki67_0h_mchip_countsdiff"),
+                    centromeres,
+                    color_groups = c(mHCT116_Ki67_0h_mchip_norm = "norm",
+                                     mHCT116_Ki67_24h_mchip_norm = "norm",
+                                     mchip_diff = "diff_norm",
+                                     mHCT116_input_0h_mchip_countsdiff = "diff_counts",
+                                     mHCT116_Ki67_0h_mchip_countsdiff = "diff_counts"),
+                    plot_chr = "chr22", 
+                    smooth = 9, fix_yaxis = T, aspect_ratio = 1/5,
+                    color_list = c(colors_set1[2], "grey20", "grey50"))
+
+
+
+```
+
+
+### 4. Scatter plots
+
+```{r scatter plots, fig.width = 5, fig.height = 3.5}
+
+# Make scatter plots between pA-DamID and ChIP-seq
+PlotScatterBinned(tib_combined, 
+                  n1 = "HCT116_AID_ctrl_r2_Ki67_padamid_norm",
+                  n2 = "HCT116_Ki67_0h_chip_norm",
+                  count_range = c(0, 700))
+ 
+PlotScatterBinned(tib_combined, 
+                  n1 = "padamid_diff_r2",
+                  n2 = "chip_diff",
+                  count_range = c(0, 700))
+
+PlotScatterBinned(tib_combined, 
+                  n1 = "HCT116_AID_ctrl_r2_Ki67_padamid_norm",
+                  n2 = "chip_diff",
+                  count_range = c(0, 700))
+
+# Repeat, but with smoothing to account for noisy data
+tib_combined_smooth <- tib_combined %>%
+  dplyr::mutate_at(vars(contains("HCT116")), function(x) runmean(x, k = 3))
+
+PlotScatterBinned(tib_combined_smooth, 
+                  n1 = "HCT116_AID_ctrl_r2_Ki67_padamid_norm",
+                  n2 = "HCT116_Ki67_0h_chip_norm",
+                  count_range = c(0, 700))
+
+PlotScatterBinned(tib_combined_smooth, 
+                  n1 = "padamid_diff_r2",
+                  n2 = "chip_diff",
+                  count_range = c(0, 700))
+
+PlotScatterBinned(tib_combined_smooth, 
+                  n1 = "HCT116_AID_ctrl_r2_Ki67_padamid_norm",
+                  n2 = "chip_diff",
+                  count_range = c(0, 700))
+
+```
+
+### 5. Distance to telomere plots for the mitotic data
+
+Make the same plots as for the pA-DamID data: for every chromosome, plot the
+scores in a smooth line from the telomere 
+
+```{r distance to telomere}
+
+# Calculate distance to telomere
+# Also, prepare telomeres
+telomeres <- c(GRanges(seqnames = chromosomes,
+                       ranges = IRanges(start = 1, end = 1)),
+               GRanges(seqnames = chromosomes,
+                       ranges = IRanges(start = seqlengths(gr_padamid_combined)[chromosomes], 
+                                        end = seqlengths(gr_padamid_combined)[chromosomes])))
+seqinfo(telomeres) <- seqinfo(gr_padamid_combined)
+telomeres <- sort(telomeres)
+
+# Remove chrY
+tib_combined <- tib_combined[tib_combined$seqnames %in% chromosomes, ]
+dis <- distanceToNearest(as(tib_combined, "GRanges"), telomeres)
+tib_combined$distance_to_telomere <- mcols(dis)$distance / 1e6
+
+# Prepare smooth line of all telomere distances separately
+tib_combined %>%
+  dplyr::select(seqnames, distance_to_telomere, mchip_diff) %>%
+  drop_na() %>%
+  filter(distance_to_telomere < 55) %>%
+  mutate(seqnames = factor(seqnames, chrom_sizes$seqnames)) %>%
+  ggplot(aes(x = distance_to_telomere, y = mchip_diff, col = seqnames)) +
+  geom_smooth(method = "loess", se = F, span = 10) +
+  geom_vline(xintercept = 0) +
+  #geom_vline(xintercept = 25, linetype = "dashed") +
+  geom_hline(yintercept = 0) +
+  coord_cartesian(xlim = c(0, 50),
+                  ylim = c(-0.07, 0.07)) +
+  theme_bw() +
+  theme(aspect.ratio = 1)  
+
+```
+
+
+### Conclusions
+
+
+
+
+### Session info
+
+```{r save data}
+
+
+
+```
+
+```{r session info}
+sessionInfo()
+```
+

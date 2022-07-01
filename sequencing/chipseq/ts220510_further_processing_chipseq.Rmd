@@ -1,0 +1,339 @@
+---
+title: "4DN DamID - Ki67 project - Ki-67 ChIP-seq"
+author: "Tom van Schaik"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output: 
+  html_document:
+    theme: journal #cerulean
+    highlight: monochrome
+    toc: true
+    toc_float: true
+    code_folding: show
+  editor_options:
+    chunk_output_type: console
+---
+
+### Project
+
+Mapping of Ki67 interactions with the genome and comparison with lamina 
+interactions.
+
+
+### Introduction
+
+Processing of Ki-67 ChIP-seq data, that we generated to determine whether we 
+can (or can not) reproduce the pA-DamID results with an orthoganol methods. 
+I already trimmed, mapped and counted the reads in 50kb bins. In this document, 
+I will do the remaining processing:
+
+  * Counts-per-million normalization
+  * Log2-ratios of Ki-67 / input
+  (* Quantile normalization)
+  (* Optionally: smoothing)
+  
+I will write the data as .rds file, and prepare bigwig files.
+
+
+### Method
+
+See introduction.
+
+
+### Set-up
+
+Set the parameters and list the data.
+
+```{r set-up, warning = F, message = F, cache = T}
+
+# Load dependencies - without warnings / messages
+library(tidyverse)
+library(GenomicRanges)
+library(rtracklayer)
+library(ggplot2)
+library(preprocessCore) # quantile normalization
+
+# Prepare output 
+output_dir <- "ts220510_further_processing_chipseq"
+dir.create(output_dir, showWarnings = FALSE)
+
+
+# Load input
+chromosomes <- c(paste0("chr", 1:22), "chrX")
+
+
+# Prepare seqnames
+chrom_sizes <- read_tsv("~/mydata/data/genomes/GRCh38/hg38.chrom.sizes",
+                        col_names = c("seqnames", "length"))
+
+```
+
+```{r knits setup}
+library(knitr)
+opts_chunk$set(fig.width = 5, fig.height = 3.5, cache = T,
+               dev=c('png', 'pdf'), 
+               fig.path = file.path(output_dir, "figures/")) 
+pdf.options(useDingbats = FALSE)
+```
+
+```{r functions}
+
+
+```
+
+
+### 1. Load counts
+
+Load counts.
+
+```{r load counts}
+
+# Read counts
+counts <- read_tsv("ts220510_chipseq/deeptools/deeptools_bam_coverage.tab")
+
+# Reformatting
+counts <- counts %>%
+  rename_at(1:3, ~ c("seqnames", "start", "end")) %>%
+  #rename_at(4:ncol(.), str_remove_all, "'") %>%
+  rename_at(4:ncol(.), ~ c("mit_plusIAA_Ki67",
+                           "mit_minusIAA_Ki67",
+                           "mit_plusIAA_input",
+                           "mit_minusIAA_input")) %>%
+  mutate(start = start + 1) %>%
+  filter(seqnames %in% chromosomes) %>%
+  mutate(seqnames = factor(seqnames, levels = chromosomes)) %>%
+  arrange(seqnames, start) %>%
+  mutate(seqnames = as.character(seqnames))
+
+```
+
+
+### 2. Normalization
+
+First, normalize to cpm. Also, bins < 10 reads are removed from further
+analyses.
+
+```{r normalize to cpm}
+
+# Prepare metadata
+samples <- names(counts)[4:ncol(counts)]
+
+metadata <- tibble(sample = samples) %>%
+  mutate(target = case_when(str_detect(sample, "Ki67") ~ "Ki67",
+                            T ~ "input"),
+         timepoint = ifelse(str_detect(sample, "plus"),
+                            "24h", "0h")) %>%
+  mutate(target = factor(target, levels = c("input", "Ki67")),
+         timepoint = factor(timepoint, levels = c("0h", "24h"))) %>%
+  mutate(experiment = paste("HCT116", target, timepoint, sep = "_"))
+
+# Rename counts
+counts <- counts %>%
+  rename_at(4:ncol(.), ~ metadata$experiment)
+
+# Normalize to cpm
+cpm <- function(x, min_count = 0) {
+  # Normalize vector to cpm (total count: 1M)
+  x_cpm <- x / sum(x) * 1e6
+  x_cpm[x < min_count] <- NA
+  
+  x_cpm
+}
+
+counts_norm <- counts %>%
+  mutate_at(all_of(unique(metadata$experiment)), cpm)
+
+
+# Finally, remove values for rows with too few reads (in absolute numbers)
+min_reads <- 10
+
+idx_not_enough_reads <- counts %>%
+  dplyr::select(4:ncol(.)) %>%
+  mutate_all(function(x) x >= min_reads) %>%
+  mutate(sum = rowSums(.),
+         idx = sum <= 3) %>%
+  pull(idx)
+
+counts_norm[idx_not_enough_reads, 4:ncol(counts_norm)] <- NA
+
+  
+```
+
+Then, calculate log2-ratio of E/L.
+
+```{r early late ratio}
+
+# Log2-ratio
+norm <- counts_norm %>%
+  mutate(
+    HCT116_Ki67_0h = 
+      log2((HCT116_Ki67_0h + 1) / 
+             (HCT116_input_0h + 1)),
+    HCT116_Ki67_24h = 
+      log2((HCT116_Ki67_24h + 1) / 
+             (HCT116_input_24h + 1)),
+    HCT116_Ki67_ratio = 
+      log2((HCT116_Ki67_0h + 1) / 
+             (HCT116_Ki67_24h + 1)),
+    HCT116_input_ratio = 
+      log2((HCT116_input_0h + 1) / 
+             (HCT116_input_24h + 1))) %>%
+  dplyr::select(-contains("input"),
+                HCT116_input_ratio)
+
+# Quantile normalization
+norm_quant <- norm
+norm_quant[, 4:ncol(norm_quant)] <- norm_quant %>%
+  dplyr::select(4:ncol(.)) %>%
+  as.matrix() %>%
+  normalize.quantiles(.)
+norm_quant <- norm_quant %>%
+  rename_at(4:ncol(.), function(x) paste0(x, "_quant"))
+  
+
+```
+
+I also want to determine the difference between the time points. Maybe the 
+difference would give me something that is most comparable with our "real"
+Ki-67 interaction data.
+
+```{r difference between time points}
+
+norm_diff <- norm %>%
+  mutate(HCT116_Ki67_0h = HCT116_Ki67_0h - HCT116_Ki67_24h) %>%
+  dplyr::select(-contains("24h")) %>% 
+  rename_at(4:ncol(.), function(x) paste0(x, "_diff"))
+
+```
+
+Finally, get the mean between the replicates to use in downstream analyses.
+
+However, there are no replicates (yet).
+
+```{r mean between replicates, eval = F}
+
+# # Average between replicates
+# norm_average <- norm_quant %>%
+#   rowwise() %>%
+#   mutate(
+#     HCT116_no_iaa = 
+#       mean(c(HCT116_no_iaa_early_r1, 
+#              HCT116_no_iaa_early_r2), 
+#            na.rm = T), 
+#     HCT116_iaa = 
+#       mean(c(HCT116_iaa_early_r1, 
+#              HCT116_iaa_early_r2), 
+#            na.rm = T)
+#   ) %>%
+#   ungroup() %>%
+#   dplyr::select(-contains("_r"))
+
+```
+
+
+### 3. Create bigwigs
+
+Finally, create bigwigs of the (quantile) normalized tracks.
+
+```{r prepare bigwigs}
+
+# Function
+ExportBWFromTibble <- function(tib, bigwig_dir, column = "diff", name = NULL) {
+  
+  # Set name as column
+  if (is.null(name)) name <- column
+  
+  # Get GRanges from Tibble
+  gr <- tib %>%
+    dplyr::select(1:3, all_of(column)) %>%
+    drop_na() %>%
+    dplyr::rename_at(4, ~ "score") %>%
+    as(., "GRanges")
+  
+  # Exception: LADs and SPIN states
+  if (grepl("LAD", column)) {
+    gr$score <- ifelse(gr$score == "LAD", 1, 0)
+  }
+  
+  if (grepl("SPIN", column)) {
+    return(NULL)
+  }
+  
+  # Add chromosome information
+  seqlengths(gr) <- chrom_sizes$length[match(seqlevels(gr),
+                                             chrom_sizes$seqnames)]
+  
+  # Write bigwig 
+  export.bw(object = gr,
+            con = file.path(bigwig_dir, paste0(name, ".bw")))
+  
+}
+
+BWsFromTibble <- function(tib) {
+  invisible(lapply(names(tib)[4:ncol(tib)],
+                   function(sample) {
+                     ExportBWFromTibble(tib,
+                                        bigwig_dir = bigwig_dir,
+                                        column = sample)
+                   }
+  ))
+}
+
+# Prepare bigwigs - normalized 
+bigwig_dir <- file.path(output_dir, "bigwig")
+dir.create(bigwig_dir, showWarnings = F)
+
+BWsFromTibble(norm)
+BWsFromTibble(norm_quant)
+BWsFromTibble(norm_diff)
+
+# Prepare bigwigs - counts
+bigwig_dir <- file.path(output_dir, "bigwig_counts")
+dir.create(bigwig_dir, showWarnings = F) 
+
+BWsFromTibble(counts_norm)
+
+```
+
+
+### 4. Plots
+
+I want to make some plots that compare time points and antibodies.
+
+```{r plots}
+
+# Correlation between time points 
+norm %>%
+  ggplot(aes(x = HCT116_Ki67_0h, y = HCT116_Ki67_24h)) +
+  geom_point(alpha = 0.1) +
+  geom_abline(intercept = 0, slope = 1, col = "red") +
+  ggtitle("Ki-67 antibody") +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+
+```
+
+
+
+
+### Conclusions
+
+...
+
+
+### Session info
+
+```{r save data}
+
+# Save RDS files of the ranges 
+saveRDS(norm, file.path(output_dir, "tib_norm.rds"))
+saveRDS(norm_quant, file.path(output_dir, "tib_norm_quant.rds"))
+saveRDS(norm_diff, file.path(output_dir, "tib_norm_diff.rds"))
+saveRDS(metadata, file.path(output_dir, "tib_repliseq_metadata.rds"))
+
+```
+
+```{r session info}
+sessionInfo()
+```
+

@@ -1,0 +1,1274 @@
+---
+title: "4DN DamID - Ki67 project - Cell cycle analysis"
+author: "Tom van Schaik"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output: 
+  html_document:
+    theme: journal #cerulean
+    highlight: monochrome
+    toc: true
+    toc_float: true
+    code_folding: show
+  editor_options:
+    chunk_output_type: console
+---
+
+### Project
+
+Mapping of Ki67 interactions with the genome and comparison with lamina 
+interactions.
+
+
+### Introduction
+
+Various analyses of RPE cells synchronized in mitosis andwith time points
+during the cell cycle afterwards.
+
+
+### Method
+
+NA
+
+
+### Set-up
+
+Set the parameters and list the data.
+
+```{r set-up, warning = F, message = F}
+
+# Load dependencies - without warnings / messages
+library(tidyverse)
+library(GenomicRanges)
+library(rtracklayer)
+library(ggplot2)
+library(RColorBrewer)
+library(GGally)
+library(corrr)
+library(caTools)
+library(ggbeeswarm)
+
+# Prepare output 
+output_dir <- "ts210519_ki67_rpe_cell_cycle"
+dir.create(output_dir, showWarnings = FALSE)
+
+
+# Load input
+chromosomes <- c(paste0("chr", 1:22), "chrX")
+
+
+input_dir <- "ts210413_data_gathering"
+
+bin_size <- readRDS(file.path(input_dir, "bin_size.rds"))
+centromeres <- readRDS(file.path(input_dir, "centromeres.rds"))
+
+colors_set1 <- readRDS(file.path(input_dir, "colors_set1.rds"))
+colors_set2 <- readRDS(file.path(input_dir, "colors_set2.rds"))
+colors_set3 <- readRDS(file.path(input_dir, "colors_set3.rds"))
+
+tib_padamid_replicates <- readRDS(file.path(input_dir, 
+                                            "tib_padamid_replicates.rds"))
+tib_padamid_combined <- readRDS(file.path(input_dir, 
+                                          "tib_padamid_combined.rds"))
+
+gr_padamid_replicates <- readRDS(file.path(input_dir, 
+                                           "gr_padamid_replicates.rds"))
+gr_padamid_combined <- readRDS(file.path(input_dir, 
+                                         "gr_padamid_combined.rds"))
+
+tib_hmm_replicates <- readRDS(file.path(input_dir, "tib_hmm_replicates.rds"))
+tib_hmm_combined <- readRDS(file.path(input_dir, "tib_hmm_combined.rds"))
+
+padamid_metadata_replicates <- readRDS(file.path(input_dir, 
+                                                 "padamid_metadata_replicates.rds"))
+padamid_metadata_combined <- readRDS(file.path(input_dir, 
+                                               "padamid_metadata_combined.rds"))
+
+
+
+# Prepare seqnames
+chrom_sizes <- tibble(seqnames = seqlevels(gr_padamid_combined),
+                      length = seqlengths(gr_padamid_combined)) %>%
+  arrange(-length)
+
+
+# Scale pA-DamID scores?
+tib_padamid_combined <- tib_padamid_combined %>%
+  mutate_at(4:ncol(.), function(x) scale(x)[, 1])
+
+```
+
+```{r knits setup}
+library(knitr)
+opts_chunk$set(fig.width = 10, fig.height = 4, cache = T,
+               dev=c('png', 'pdf'), fig.path = file.path(output_dir, "figures/")) 
+pdf.options(useDingbats = FALSE)
+```
+
+```{r functions}
+
+# From Fede:
+# ggpairs custom functions
+corColor <- function(data, mapping, color = I("black"), sizeRange = c(1, 3), ...) {
+
+  x   <- eval_data_col(data, mapping$x)
+  y   <- eval_data_col(data, mapping$y)
+  r   <- cor(x, y)
+  rt  <- format(r, digits = 3)
+  tt  <- as.character(rt)
+  cex <- max(sizeRange)
+
+  # helper function to calculate a useable size
+  percent_of_range <- function(percent, range) {
+    percent * diff(range) + min(range, na.rm = TRUE)
+  }
+
+  # plot correlation coefficient
+  p <- ggally_text(label = tt, mapping = aes(), xP = 0.5, yP = 0.5,
+                   # size = I(percent_of_range(cex * abs(r), sizeRange)), 
+                   size = 6, 
+                   color = color, ...) +
+    theme(panel.grid.minor=element_blank(),
+          panel.grid.major=element_blank())
+
+  corColors <- RColorBrewer::brewer.pal(n = 7, name = "RdYlBu")[2:6]
+
+  if (r <= boundaries[1]) {
+    corCol <- corColors[1]
+  } else if (r <= boundaries[2]) {
+    corCol <- corColors[2]
+  } else if (r < boundaries[3]) {
+    corCol <- corColors[3]
+  } else if (r < boundaries[4]) {
+    corCol <- corColors[4]
+  } else {
+    corCol <- corColors[5]
+  }
+
+  p <- p +
+    theme(panel.background = element_rect(fill = corCol))
+
+  return(p)
+}
+
+customScatter <- function (data, mapping) 
+{
+    p <- ggplot(data = data, mapping) + 
+      geom_bin2d(bins = 100) +
+      geom_smooth(method = "lm", se = T, col = "red") +
+      scale_fill_gradient(low = "lightgrey", high = "black", name = "Count") +
+      theme_bw()
+    
+    p 
+}
+
+PlotScatter <- function(tib, n1, n2, color_by = NULL, identity = F,
+                        xlimits = NULL, facet_seqnames = F,
+                        smooth_line = F, smooth_seqnames = F) {
+  # Get tibble
+  tib <- tib %>%
+    dplyr::select(seqnames, matches(n1), matches(n2)) %>%
+    rename_all(~ c("seqnames", "n1", "n2")) %>%
+    mutate(seqnames = factor(seqnames, 
+                             levels = seqlevels(gr_padamid_combined)))
+  
+  # Prepare color
+  if (! is.null(color_by)) {
+    tib <- tib %>%
+      add_column(color = color_by) %>%
+      drop_na()
+    alpha = 1
+    limits_color <- quantile(tib$color, c(0.001, 0.999), na.rm = T)
+    tib$color[tib$color < limits_color[1]] <- limits_color[1]
+    tib$color[tib$color > limits_color[2]] <- limits_color[2]
+  } else {
+    tib <- tib %>% drop_na()
+    tib$color = "1"
+    alpha = 0.02
+  }
+  
+  # Plot
+  if (is.null(xlimits)) {
+    xlimits <- quantile(tib$n1, c(0.001, 0.999), na.rm = T) * 1.4 
+  }
+  ylimits <- quantile(tib$n2, c(0.001, 0.999), na.rm = T) * 1.4
+  
+  plt <- tib %>%
+    arrange(sample(1:nrow(.), size = nrow(.), replace = F)) %>%
+    ggplot(aes(x = n1, y = n2, color = color)) +
+    geom_point(size = 0.5, alpha = alpha) +
+    geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+    geom_vline(xintercept = 0, col = "black", linetype = "dashed") +
+    xlab(n1) +
+    ylab(n2) +
+    ggtitle(paste0("Spearman: ", 
+                   round(cor(tib$n1, tib$n2, use = "complete.obs",
+                             method = "spearman"), 2))) +
+    coord_cartesian(xlim = xlimits, ylim = ylimits) +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+  
+  # Prepare color
+  if (! is.null(color_by)) {
+    plt <- plt +
+      scale_color_gradient2(low = "blue", mid = "grey", high = "red",
+                            midpoint = 0)
+  } else {
+    plt <- plt + 
+      scale_color_manual(values = "black", guide = F)
+  }
+  if (identity) plt <- plt + geom_abline(slope = 1, intercept = 0, col = "red", linetype = "dashed")
+  
+  # Facets / smooth
+  if (facet_seqnames) plt <- plt + facet_wrap(~ seqnames)
+  if (smooth_line) plt <- plt + geom_smooth(method = "loess", span = 0.7, se = F, col = "black")
+  if (smooth_seqnames) plt <- plt + geom_smooth(aes(group = seqnames), 
+                                                alpha = 0.2, col = "black",
+                                                method = "loess", span = 0.7, se = F)
+  
+  plot(plt)
+  
+}
+
+PlotScatterBinned <- function(tib, n1, n2, color_by = NULL, identity = F, 
+                              n_min = 10, ylimits_col = c(-2.4, 2.4),
+                              xlimits = c(0, 50), smooth_line = F,
+                              limits_count = c(0, 400)) {
+  # Get tibble
+  tib_process <- tib %>%
+    dplyr::select(seqnames, all_of(n1), all_of(n2)) %>%
+    rename_all(~ c("seqnames", "n1", "n2"))
+  
+  if (! is.null(color_by)) {
+    tib_process <- tib_process %>%
+      add_column(color = color_by)
+  }
+  
+  tib_process <- tib_process %>%
+    drop_na() %>%
+    # Filter xlimits before making the bins
+    filter(n1 < (xlimits[2]+5))
+  
+  # Change color range
+  if (! is.null(color_by)) {
+    limits_color <- quantile(tib_process$color, c(0.001, 0.999), na.rm = T)
+    tib_process$color[tib_process$color < limits_color[1]] <- limits_color[1]
+    tib_process$color[tib_process$color > limits_color[2]] <- limits_color[2]
+  }
+  
+  # Metrics
+  n1_min = min(tib_process$n1) - 0.001
+  n1_max = max(tib_process$n1) + 0.001
+  n1_binsize <- (n1_max - n1_min) / 49
+  
+  n2_min = min(tib_process$n2) - 0.001
+  n2_max = max(tib_process$n2) + 0.001
+  n2_binsize <- (n2_max - n2_min) / 49
+  
+  tib_summary <- tib_process %>%
+    mutate(n1_cut = cut(n1, 
+                        seq(n1_min, n1_max, length.out = 50)),
+           n2_cut = cut(n2, 
+                        seq(n2_min, n2_max, length.out = 50))) %>%
+    mutate(n1_bin = as.numeric(as.factor(n1_cut)),
+           n2_bin = as.numeric(as.factor(n2_cut))) %>%
+    mutate(n1_bin = n1_min - n1_binsize/2 + n1_bin * n1_binsize,
+           n2_bin = n2_min - n2_binsize/2 + n2_bin * n2_binsize) %>%
+    group_by(n1_bin, n2_bin)
+  
+  # Plot
+  if (! is.null(color_by)) {
+    tib_summary <- tib_summary %>%
+    dplyr::summarise(n = n(),
+                     mark = mean(color)) %>%
+    ungroup() %>%
+    filter(n >= n_min)
+    
+    plt <- tib_summary %>%
+      ggplot(aes(x = n1_bin, y = n2_bin)) +
+      geom_tile(aes(fill = mark)) +
+      scale_fill_gradient2(low = "blue", mid = "grey", high = "red",
+                           midpoint = 0, limits = ylimits_col, 
+                           na.value = "green") +
+      geom_hline(yintercept = 0, linetype = "dashed", col = "black")
+  } else {
+    tib_summary <- tib_summary %>%
+    dplyr::summarise(n = n()) %>%
+    ungroup() %>%
+    filter(n >= n_min)
+    
+    plt <- tib_summary %>%
+      ggplot(aes(x = n1_bin, y = n2_bin)) +
+      geom_tile(aes(fill = n)) +
+      scale_fill_gradient(low = "lightgrey", high = "black", name = "Count",
+                          limits = limits_count, na.value = "green") +
+      geom_hline(yintercept = 0, linetype = "dashed", col = "blue")
+  }
+  
+  plt <- plt + 
+    xlab(n1) +
+    ylab(n2) +
+    coord_cartesian(xlim = xlimits) +
+    ggtitle(paste0("Pearson: ", 
+                   round(cor(tib_process$n1, tib_process$n2, use = "complete.obs",
+                             method = "pearson"), 2))) +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+  
+  if (smooth_line) plt <- plt + geom_smooth(data = tib_process,
+                                            aes(x = n1, y = n2),
+                                            method = "loess", 
+                                            span = 0.7, se = F, col = "red")
+  
+  
+  plot(plt)
+  
+}
+
+
+PlotDataTracksLight <- function(input_tib, exp_names, centromeres, 
+                                color_groups, plot_chr = "chr1", 
+                                plot_start = 1, plot_end = 500e6,
+                                smooth = 1, color_list = NULL,
+                                fix_yaxis = F) {
+  
+  # Exp names is a vector of sample names
+  exp_search <- paste(exp_names, collapse = "|")
+  
+  # Get the scores for the samples
+  tib_plot <- input_tib %>%
+    dplyr::select(seqnames, start, end, 
+                  matches(exp_search))
+  
+  if (smooth > 1) {
+    tib_plot <- tib_plot %>%
+      mutate_at(vars(contains("_")), 
+                runmean, k = smooth)
+  }
+  
+  # Filter for plotting window
+  tib_plot <- tib_plot %>%
+    filter(seqnames == plot_chr,
+           start >= plot_start,
+           end <= plot_end)
+  
+  # Gather
+  tib_gather <- tib_plot %>%
+    gather(key, value, -seqnames, -start, -end) %>%
+    mutate(key = factor(key, levels = exp_names),
+           fill_column = color_groups[match(key, names(color_groups))],
+           fill_column = factor(fill_column, levels = unique(color_groups)))
+  
+  
+  # Centromeres
+  centromeres.plt <- as_tibble(centromeres) %>%
+    filter(seqnames == plot_chr) %>%
+    gather(key_centromeres, value, start, end)
+  
+  # Plot
+  ylimits <- quantile(tib_gather$value, c(0.001, 0.999), na.rm = T)
+  fill_column <- NULL
+  
+  plt <- tib_gather %>% 
+    ggplot(aes(fill = fill_column))
+  
+  
+  # Set all counts tracks to the same limits
+  plt <- plt + 
+    geom_rect(aes(xmin = start / 1e6, xmax = end / 1e6, 
+                  ymin = 0, ymax = value)) +
+    geom_line(data = centromeres.plt, 
+              aes(x = value / 1e6, y = 0),
+              color = "black", size = 2) +
+    geom_hline(yintercept = 0, size = 0.5) +
+    facet_grid(key ~ ., scales = "free_y") +
+    xlab(paste0(plot_chr, " (Mb)")) +
+    ylab("Score") +
+    scale_x_continuous(expand = c(0, 0)) + 
+    scale_y_continuous(expand = c(0.025, 0.025)) +
+    theme_classic()
+  
+  if (! is.null(color_list)) {
+    colors <- levels(tib_gather$fill_column)
+
+    color_list <- color_list[1:length(colors)]
+    names(color_list) <- colors
+    #colors <- recode(colors, !!!color_list)
+    
+    plt <- plt +
+      scale_fill_manual(values = color_list, guide = F)
+  } else {
+    plt <- plt +
+      scale_fill_brewer(palette = "Set1", guide = F)
+  }
+  
+  if (fix_yaxis) {
+    plt <- plt + 
+      coord_cartesian(xlim = c(max(c(plot_start,
+                                   min(tib_gather$start))) / 1e6,
+                             min(c(plot_end,
+                                   max(tib_gather$end))) / 1e6),
+                    ylim = ylimits)
+  } else {
+    plt <- plt + 
+      coord_cartesian(xlim = c(max(c(plot_start,
+                                   min(tib_gather$start))) / 1e6,
+                             min(c(plot_end,
+                                   max(tib_gather$end))) / 1e6))
+  }
+  
+  plot(plt)
+  
+}
+
+quantiles <- function(x) {
+  # Use quantiles as boxplot boundaries
+  r <- quantile(x, probs = c(0.05, 0.25, 0.5, 0.75, 0.95))
+  names(r) <- c("ymin", "lower", "middle", "upper", "ymax")
+  r
+}
+
+
+
+
+```
+
+
+### 1. Correlations between time points
+
+I will perform these analyses only on the combined data, as the data is only 
+shallowly sequenced.
+
+```{r cell cycle correlations, cache = T, message = F, warning = F, fig.width = 8, fig.height = 8}
+
+# Gather metadata
+padamid_metadata_cellcycle <- padamid_metadata_combined %>%
+  filter(cell == "RPE" &
+           experiment %in% c("wildtype", "cell_cycle"),
+         condition != "t_21h")
+         #! target %in% c("LMNB1", "H3K27me3", "H3K9me3"))
+
+# Use GGally to make correlation plots
+boundaries <- seq(from = 0.1, to = 0.7, length.out = 4)
+
+# Combined
+tib <- tib_padamid_combined %>%
+  drop_na() %>%
+  dplyr::select(padamid_metadata_cellcycle$sample)
+
+plt <- ggpairs(tib %>%
+                 dplyr::select(contains("Ki67")),
+               upper = list(continuous = corColor),
+               lower = list(continuous = customScatter),
+               diag = list(continuous = function(data, mapping, ...) {
+                   ggally_densityDiag(data = data, mapping = mapping, alpha = 0.3, fill = "red") +
+                   theme_bw()})) +
+  ggtitle("Correlating all data") +
+  xlab("") +
+  ylab("")
+
+print(plt)
+
+```
+
+```{r cell cycle correlation plot, cache = T, message = F, warning = F, fig.width = 5, fig.height = 3.5}
+
+# Correlation plot only
+metadata <- padamid_metadata_cellcycle
+
+tib_cor <- tib %>%
+  dplyr::select(contains("Ki67")) %>%
+  correlate(method = "pearson") %>%
+  gather(key, value, -term) %>%
+  mutate(value = replace_na(value, 1)) %>%
+  mutate(n1 = str_remove(term, "_Ki67"),
+         n2 = str_remove(key, "_Ki67"),
+         match1 = match(term, metadata$sample),
+         match2 = match(key, metadata$sample),
+         experiment1 = metadata$experiment[match1],
+         experiment2 = metadata$experiment[match2],
+         condition1 = metadata$condition[match1],
+         condition2 = metadata$condition[match2]) %>%
+  drop_na()
+
+# Plot
+plt <- tib_cor %>%
+  ggplot(aes(x = condition1, y = condition2, fill = value)) +
+  geom_tile() +
+  xlab("") + ylab("") +
+  scale_fill_gradientn(colors = colorRampPalette(rev(brewer.pal(n = 7, 
+                                                                name = "RdYlBu")))(100),
+                       limits = c(min(0, tib_cor$value), 1),
+                       name = "Pearson correlation") +
+  theme_bw() +
+  theme(aspect.ratio = 1,
+        axis.text.x = element_text(angle = 90, hjust = 1))
+plot(plt)
+
+```
+
+As expected, t = 0h does not correlate well with the other time points. Also, 
+correlations get lower if time points are further apart. 
+
+I also want to make these plots for individual chromosomes. Scatterplots are too
+much, but simple pearson correlations should do the trick.
+
+```{r cell cycle correlations per chromosome, cache = T, message = F, warning = F, fig.width = 7, fig.height = 3.5}
+
+# Calculate pearson correlations per chromosome
+CorrelationsPerChromosome <- function(input_tib, metadata) {
+  
+  # Gather data and calculate pearson correlations
+  tib <- input_tib %>%
+    drop_na() %>%
+    dplyr::select(seqnames, metadata$sample)
+  
+  # Calculate mean score per chromosome
+  tib_summary <- tib %>%
+    gather(key, value, -seqnames) %>%
+    mutate(match = match(key, metadata$sample),
+           experiment = metadata$experiment[match],
+           condition = metadata$condition[match],
+           seqnames = factor(seqnames, chromosomes)) %>%
+    mutate(size = seqlengths(gr_padamid_combined)[match(seqnames, 
+                                                        seqlevels(gr_padamid_combined))],
+           size = size / 1e6) %>%
+    drop_na() 
+  
+  # Boxplot of all scores per chromosome
+  plt <- tib_summary %>%
+    arrange(-size) %>% 
+    mutate(seqnames = factor(seqnames, levels = unique(seqnames))) %>%
+    ggplot(aes(x = seqnames, y = value, fill = condition)) +
+    #geom_boxplot(outlier.shape = NA) +
+    stat_summary(fun.data = quantiles, geom = "boxplot") +
+    geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+    facet_grid(. ~ condition) +
+    xlab("") +
+    ylab("Ki67 score") +
+    coord_cartesian(ylim = c(-2.5, 3.5)) +
+    scale_fill_manual(values = colors_set2, guide = F) +
+    theme_bw() +
+    theme(aspect.ratio = 1,
+          axis.text.x = element_text(angle = 90, hjust = 1))
+  plot(plt)
+  
+  plt <- tib_summary %>%
+    arrange(-size) %>% 
+    mutate(seqnames = factor(seqnames, levels = unique(seqnames))) %>%
+    filter(condition %in% c("wt", "t_1h")) %>%
+    ggplot(aes(x = seqnames, y = value, fill = condition)) +
+    #geom_boxplot(outlier.shape = NA) +
+    stat_summary(fun.data = quantiles, geom = "boxplot",
+                 position = "dodge") +
+    geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+    xlab("") +
+    ylab("Ki67 score") +
+    coord_cartesian(ylim = c(-2.5, 3.5)) +
+    scale_fill_manual(values = c("grey30", "#E41A1C")) +
+    theme_bw() +
+    theme(aspect.ratio = 1,
+          axis.text.x = element_text(angle = 90, hjust = 1))
+  plot(plt)
+  
+  
+  # Boxplot of all scores per chromosome - by condition
+  plt <- tib_summary %>%
+    arrange(-size) %>% 
+    filter(! condition %in% c("wt", "t_0h")) %>%
+    mutate(seqnames = factor(seqnames, levels = unique(seqnames))) %>%
+    ggplot(aes(x = condition, y = value, fill = condition)) +
+    #geom_boxplot(outlier.shape = NA) +
+    stat_summary(fun.data = quantiles, geom = "boxplot") +
+    geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+    facet_wrap( ~ seqnames) +
+    xlab("") +
+    ylab("Ki67 score") +
+    coord_cartesian(ylim = c(-1.5, 1.5)) +
+    scale_fill_manual(values = colors_set2, guide = F) +
+    theme_bw() +
+    theme(aspect.ratio = 1,
+          axis.text.x = element_text(angle = 90, hjust = 1))
+  plot(plt)
+  
+  
+  # Single point (mean score) per chromosome - without wildtype and t=0h
+  plt <- tib_summary %>%
+    group_by(experiment, condition, size, seqnames) %>%
+    summarise(mean = mean(value)) %>%
+    filter(! condition %in% c("wt", "t_0h")) %>%
+    ungroup() %>% 
+    arrange(-size) %>% 
+    mutate(seqnames = factor(seqnames, levels = unique(seqnames))) %>%
+    ggplot(aes(x = seqnames, y = mean, col = condition)) +
+    geom_point(size = 2) +
+    geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+    xlab("") +
+    ylab("Mean Ki67 score") +
+    scale_color_brewer(palette = "Spectral") +
+    theme_bw() +
+    theme(aspect.ratio = 1,
+          axis.text.x = element_text(angle = 90, hjust = 1))
+  plot(plt)
+  
+  # Same, but difference plot
+  plt <- tib_summary %>%
+    group_by(experiment, condition, size, seqnames) %>%
+    summarise(mean = mean(value)) %>%
+    filter(! condition %in% c("wt", "t_0h")) %>%
+    ungroup() %>% 
+    spread(condition, mean) %>%
+    mutate(t_3h = t_3h - t_1h,
+           t_6h = t_6h - t_1h,
+           t_10h = t_10h - t_1h) %>%
+    dplyr::select(-t_1h) %>%
+    gather(condition, mean, contains("t_")) %>%
+    arrange(-size) %>% 
+    mutate(seqnames = factor(seqnames, levels = unique(seqnames)),
+           condition = factor(condition, levels = levels(metadata$condition))) %>%
+    ggplot(aes(x = seqnames, y = mean, col = condition)) +
+    geom_point(size = 2) +
+    geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+    xlab("") +
+    ylab("Difference in Ki67 with t=1h") +
+    scale_color_manual(values = brewer.pal("Spectral", n = 4)[2:4]) +
+    theme_bw() +
+    theme(aspect.ratio = 1,
+          axis.text.x = element_text(angle = 90, hjust = 1))
+  plot(plt)
+  
+  
+  # Can I show that interactions are increased on large chromosomes compared to unsync cells?
+  plt <- tib %>%
+    mutate(t_1h = RPE_1h_Ki67 - RPE_wt_Ki67,
+           t_3h = RPE_3h_Ki67 - RPE_wt_Ki67,
+           t_6h = RPE_6h_Ki67 - RPE_wt_Ki67,
+           t_10h = RPE_10h_Ki67 - RPE_wt_Ki67) %>%
+    dplyr::select(seqnames, starts_with("t_")) %>%
+    gather(key, value, -seqnames) %>%
+    mutate(seqnames = factor(seqnames, chrom_sizes$seqnames),
+           key = factor(key, levels = c("t_1h", "t_3h",
+                                        "t_6h", "t_10h"))) %>%
+    ggplot(aes(x = seqnames, y = value)) +
+    #geom_boxplot(outlier.shape = NA) +
+    stat_summary(fun.data = quantiles, geom = "boxplot") +
+    facet_grid(. ~ key) +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+  #plot(plt)
+  
+  # By chromosome
+  plt <- tib %>%
+    mutate(t_1h = RPE_1h_Ki67 - RPE_wt_Ki67,
+           t_3h = RPE_3h_Ki67 - RPE_wt_Ki67,
+           t_6h = RPE_6h_Ki67 - RPE_wt_Ki67,
+           t_10h = RPE_10h_Ki67 - RPE_wt_Ki67) %>%
+    dplyr::select(seqnames, starts_with("t_")) %>%
+    gather(key, value, -seqnames) %>%
+    mutate(seqnames = factor(seqnames, chrom_sizes$seqnames),
+           key = factor(key, levels = c("t_1h", "t_3h",
+                                        "t_6h", "t_10h"))) %>%
+    filter(key == "t_1h") %>%
+    ggplot(aes(x = seqnames, y = value, fill = seqnames)) +
+    #geom_boxplot(outlier.shape = NA) +
+    stat_summary(fun.data = quantiles, geom = "boxplot") +
+    geom_hline(yintercept = 0, col = "grey30", linetype = "dashed") +
+    coord_cartesian(ylim = c(-2.3, 1.5)) +
+    xlab("Chromosome (by size)") +
+    ylab("Difference in Ki67 with unsync") +
+    scale_fill_discrete(guide = F) +
+    theme_bw() +
+    theme(aspect.ratio = 1,
+          axis.text.x = element_text(angle = 90, hjust = 1))
+  plot(plt)
+    
+  
+  # Fraction of the genome "enriched"
+  plt <- tib %>%
+    drop_na() %>%
+    gather(key, value, -seqnames) %>%
+    group_by(key, seqnames) %>%
+    dplyr::summarise(fraction = mean(value > 0)) %>%
+    ungroup() %>%
+    mutate(seqnames = factor(seqnames, chrom_sizes$seqnames),
+           key = factor(key, names(tib))) %>%
+    filter(key %in% c("RPE_wt_Ki67", "RPE_1h_Ki67")) %>%
+    ggplot(aes(x = seqnames, y = fraction, fill = key)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    scale_fill_manual(values = c("grey30", "#E41A1C")) +
+    theme_bw() +
+    theme(aspect.ratio = 1,
+          axis.text.x = element_text(angle = 90, hjust = 1))
+  #plot(plt)
+  
+  
+  # Mean score vs chromosome size
+  plt <- tib_summary %>%
+    group_by(experiment, condition, size, seqnames) %>%
+    summarise(mean = mean(value)) %>%
+    ggplot(aes(x = size, y = mean, col = condition)) +
+    geom_point() +
+    geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+    facet_grid(. ~ condition) +
+    xlab("Chromosome size (Mb)") +
+    ylab("Mean Ki67 score") +
+    coord_cartesian(xlim = c(0, 250)) +
+    scale_color_manual(values = colors_set2, guide = F) +
+    theme_bw() +
+    theme(aspect.ratio = 1,
+          axis.text.x = element_text(angle = 90, hjust = 1))
+  plot(plt)
+  
+  tib_cor <- tib %>%
+    group_by(seqnames) %>%
+    nest() %>%
+    mutate(cordf = map(data, correlate)) %>%
+    unnest(cordf) %>%
+    dplyr::select(-data) %>%
+    gather(key, value, -seqnames, -term) %>%
+    drop_na() %>%
+    mutate(n1 = str_remove(term, "_Ki67"),
+           n2 = str_remove(key, "_Ki67"),
+           match1 = match(term, metadata$sample),
+           match2 = match(key, metadata$sample),
+           experiment1 = metadata$experiment[match1],
+           experiment2 = metadata$experiment[match2],
+           condition1 = metadata$condition[match1],
+           condition2 = metadata$condition[match2],
+           seqnames = factor(seqnames, chromosomes)) %>%
+    mutate(size = seqlengths(gr_padamid_replicates)[match(seqnames, 
+                                                          seqlevels(gr_padamid_replicates))],
+           size = size / 1e6) %>%
+    drop_na()
+  
+  # Plot
+  plt <- tib_cor %>%
+    arrange(-size) %>% 
+    mutate(seqnames = factor(seqnames, levels = unique(seqnames))) %>%
+    ggplot(aes(x = seqnames, y = value, col = condition2)) +
+    geom_point() +
+    geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+    facet_grid(. ~ condition1) +
+    xlab("") +
+    ylab("Pearson correlation") +
+    coord_cartesian(ylim = c(0, 1)) +
+    scale_color_manual(values = colors_set2) +
+    theme_bw() +
+    theme(aspect.ratio = 1,
+          axis.text.x = element_text(angle = 90, hjust = 1))
+  plot(plt)
+  
+  plt <- tib_cor %>%
+    ggplot(aes(x = size, y = value, col = condition2)) +
+    geom_point() +
+    geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+    facet_grid(. ~ condition1) +
+    xlab("Chromosome size (Mb)") +
+    ylab("Pearson correlation") +
+    coord_cartesian(xlim = c(0, 250),
+                    ylim = c(0, 1)) +
+    scale_color_manual(values = colors_set3) +
+    theme_bw() +
+    theme(aspect.ratio = 1,
+          axis.text.x = element_text(angle = 90, hjust = 1))
+  plot(plt)
+  
+}
+
+# Correlations per chromosome
+CorrelationsPerChromosome(tib_padamid_combined, 
+                          padamid_metadata_cellcycle %>%
+                            filter(target == "Ki67"))
+
+```
+
+
+### 2. Enrichment at centromeres and telomeres
+
+These analyses are based on simple counts. I want to do a similar analysis based 
+on the normalized scores themselves.
+
+```{r enrichment near rdna and centromeres, cache = T, message = F, warning = F, fig.width = 9, fig.height = 6}
+
+# Get similar chromosomes for the two objects and filter samples
+tib_padamid_cellcycle <- tib_padamid_combined %>%
+  dplyr::select(seqnames, start, end, padamid_metadata_cellcycle$sample) %>%
+  filter(seqnames %in% chromosomes)
+centromeres <- centromeres[seqnames(centromeres) %in% chromosomes]
+
+# Also, prepare telomeres
+telomeres <- c(GRanges(seqnames = chromosomes,
+                       ranges = IRanges(start = 1, end = 1)),
+               GRanges(seqnames = chromosomes,
+                       ranges = IRanges(start = seqlengths(gr_padamid_combined)[chromosomes], 
+                                        end = seqlengths(gr_padamid_combined)[chromosomes])))
+seqinfo(telomeres) <- seqinfo(gr_padamid_combined)
+telomeres <- sort(telomeres)
+
+# Add distance to centromeres and telomeres to the GRanges object - in Mb
+dis <- distanceToNearest(as(tib_padamid_cellcycle, "GRanges"), centromeres)
+tib_padamid_cellcycle$distance_to_centromere <- mcols(dis)$distance / 1e6
+
+dis <- distanceToNearest(as(tib_padamid_cellcycle, "GRanges"), telomeres)
+tib_padamid_cellcycle$distance_to_telomere <- mcols(dis)$distance / 1e6
+
+# Process
+tib <- tib_padamid_cellcycle %>%
+  dplyr::select(-start, -end) %>%
+  mutate(rdna = as.logical(seqnames %in% paste0("chr", c(13, 14, 15, 21, 22)))) %>%
+  gather(key, value, -contains("distance"), -rdna, -seqnames) %>%
+  separate(key, c("cell", "condition", "target"), remove = F) %>%
+  filter(target == "Ki67") %>%
+  mutate(match = match(key, padamid_metadata_cellcycle$sample),
+         condition = padamid_metadata_cellcycle$condition[match],
+         experiment = padamid_metadata_cellcycle$experiment[match],
+         dis_group_centromere = as.numeric(cut(distance_to_centromere, 
+                                               breaks = seq(-1, max(distance_to_centromere) + 5, 
+                                                            by = 1))) - 1,
+         dis_group_telomere = as.numeric(cut(distance_to_telomere, 
+                                             breaks = seq(-1, max(distance_to_telomere) + 5, 
+                                                          by = 1))) - 2,
+         dis_group_telomere = ifelse(dis_group_telomere < 0, 0, dis_group_telomere)) %>%
+  dplyr::select(-contains("distance")) %>%
+  gather(class, class_value, contains("dis_group")) %>%
+  mutate(class = str_remove(class, "dis_group_"))
+
+
+# Plot as boxplots
+# First, calculate boxplots to have more control over ylimits
+tib_summary <- tib %>%
+  group_by(experiment, condition, class, class_value) %>%
+  drop_na() %>%
+  summarise(ymin = quantile(value, 0.05), 
+            lower = quantile(value, 0.25), 
+            middle = quantile(value, 0.5), 
+            upper = quantile(value, 0.75), 
+            ymax = quantile(value, 0.95))
+
+tib_summary %>%
+  filter(class_value <= 30) %>%
+  ggplot(aes(x = class_value, ymin = ymin, lower = lower, middle = middle, 
+             upper = upper, ymax = ymax, group = class_value, y = middle)) +
+    geom_boxplot(stat="identity", outlier.shape = NA, fill = "lightgrey", col = "black") +
+    geom_line(aes(y = middle, group = NULL), col = "red") +
+    geom_hline(yintercept = 0, col = "blue", linetype = "dashed") +
+    facet_grid(class ~ condition, scales = "free_y") + 
+    xlab("Distance to feature (Mb)") +
+    ylab("pA-DamID (log2)") +
+    #coord_cartesian(xlim = c(0, 30)) +
+    theme_bw() +
+    theme(aspect.ratio = 1,
+        axis.text.x = element_text(angle = 90, hjust = 1))
+
+# Is the enrichment specific for rDNA chromosomes, or is chromosome size more 
+# important?
+tib_summary <- tib %>%
+  filter(class_value < 2) %>%
+  mutate(condition = droplevels(condition)) %>%
+  group_by(experiment, condition, seqnames, class) %>%
+  drop_na() %>%
+  summarise(mean = mean(value)) %>%
+  ungroup() %>%
+  mutate(seqnames = factor(seqnames, chromosomes),
+         rdna = seqnames %in% paste0("chr", c(13, 14, 15, 21, 22))) %>%
+  drop_na() %>%
+  mutate(size = seqlengths(gr_padamid_replicates)[match(seqnames, 
+                                                        seqlevels(gr_padamid_replicates))],
+         size = size / 1e6)
+
+tib_summary %>%
+  arrange(-size) %>% 
+  mutate(seqnames = factor(seqnames, levels = unique(seqnames))) %>%
+  ggplot(aes(x = seqnames, y = mean, col = class, shape = rdna)) +
+  geom_point(size = 2) +
+  geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+  facet_grid(. ~ condition) +
+  xlab("") +
+  ylab("Ki67 score near centromeres") +
+  scale_color_manual(values = colors_set3) +
+  theme_bw() +
+  theme(aspect.ratio = 1,
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+# Add chromosome size and make a scatter plot
+tib_summary %>%
+  ggplot(aes(x = size, y = mean, col = class, shape = rdna)) +
+  geom_point(size = 2) +
+  geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+  xlab("Chromosome size (Mb)") +
+  ylab("Ki67 score near centromeres (<2Mb)") +
+  scale_color_manual(values = colors_set3) +
+  facet_grid(. ~ condition) +
+  coord_cartesian(xlim = c(0, 250)) +
+  theme_bw() +
+  theme(aspect.ratio = 1,
+        axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+This mostly shows the expected result: t=0h is enriched near telomeres while the
+other time points are more enriched at/near centromeres.
+
+
+### 3. Overlap in HMM calls
+
+To determine the best strategy for the analysis, I need to consider a few 
+options. I previously used HMM calls to do this. Can I also do this for the Ki67
+data, or is this of too low quality? Let's find out.
+
+```{r cell cycle time points and hmm calls, cache = T, fig.width = 6, fig.height = 4}
+
+GenomeOverlap <- function(tib_hmm, metadata) {
+  # Genome overlap is defined as the number of enriched domains (AD) over 
+  # not-enriched (iAD) domains. NA bins are discarded
+  
+  tib <- tib_hmm %>%
+    drop_na() %>%
+    dplyr::select(metadata$sample) %>%   
+    mutate_all(function(x) (x == "AD") + 0) %>%
+    #rename_all(function(x) str_remove(x, "_Ki67")) %>%
+    summarise_all(.funs = mean) %>%
+    gather(key, value) %>%
+    mutate(match = match(key, metadata$sample),
+         condition = metadata$condition[match],
+         experiment = metadata$experiment[match])
+  
+  plt <- tib %>%
+    ggplot(aes(x = condition, y = value, fill = experiment)) +
+    geom_bar(stat = "identity") +
+    geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+    xlab("") +
+    ylab("Overlap genome") +
+    scale_fill_manual(values = colors_set3, guide = F) +
+    theme_bw() +
+    theme(aspect.ratio = 1,
+          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+  
+  plot(plt)
+  
+}
+
+
+PlotJaccard <- function(tib_hmm, metadata) {
+  # Function to create heatmap of Jaccard indices
+  
+  tib <- tib_hmm %>%
+    drop_na() %>%
+    dplyr::select(metadata$sample) %>%   
+    mutate_all(function(x) (x == "AD") + 0)
+  
+  
+  # For this, use a correlation heatmap with heatmap 
+  tib_dist <- 1 - as.matrix(stats::dist(t(as.matrix(tib)), method = "binary"))
+  tib_dist <- as_tibble(tib_dist) %>%
+    gather(key, value) %>%
+    mutate(match = match(key, metadata$sample),
+           condition = metadata$condition[match],
+           experiment = metadata$experiment[match],
+           target = rep(unique(condition), times = length(unique(condition))))
+  
+  plt <- tib_dist %>%
+    ggplot(aes(x = condition, y = target, fill = value)) +
+    geom_tile() +
+    xlab("") + ylab("") +
+    scale_fill_gradientn(colors = colorRampPalette(rev(brewer.pal(n = 7, 
+                                                                  name = "RdYlBu")))(100),
+                         limits = c(0, 1),
+                         name = "Jaccard index") +
+    theme_bw() +
+    theme(aspect.ratio = 1,
+          axis.text.x = element_text(angle = 90, hjust = 1))
+  plot(plt)
+  
+}
+
+# Plot overlap genome
+GenomeOverlap(tib_hmm_combined, 
+              padamid_metadata_cellcycle %>%
+                filter(target == "Ki67"))
+
+# Make Jaccard heatmap
+PlotJaccard(tib_hmm_combined, 
+            padamid_metadata_cellcycle %>%
+                filter(target == "Ki67"))
+
+```
+
+Maybe I can use this for the analyses when the data is sequenced deeper. Right 
+now, the quality is insufficient to get stable HMM calls.
+
+
+<!-- ### 4. Difference tracks -->
+
+<!-- Let's also make some difference tracks for IGV visualization. -->
+
+<!-- ```{r difference tracks, cache = T} -->
+
+<!-- MakeDifferenceTracks <- function(input_gr, metadata, basename, bigwig_dir) { -->
+<!--   # Function to create difference tracks of a certain experiment, using the -->
+<!--   # basename to substract the values -->
+
+<!--   # Get the sample names -->
+<!--   samples <- metadata$sample -->
+<!--   base_condition <- metadata$condition[metadata$sample == basename] -->
+
+<!--   # Get the mcols for the granges -->
+<!--   gr <- input_gr -->
+<!--   mcols(gr) <- mcols(gr)[, samples] -->
+
+<!--   # Prepare output directory -->
+<!--   dir.create(bigwig_dir, showWarnings = F) -->
+
+<!--   # Loop over the samples -->
+<!--   for (s in samples) { -->
+
+<!--     # Not for the basename -->
+<!--     if (s == basename) next -->
+
+<!--     # Get the difference -->
+<!--     tmp <- gr -->
+<!--     mcols(tmp) <- data.frame(score = mcols(gr)[, s] - mcols(gr)[, basename]) -->
+<!--     tmp <- tmp[! is.na(tmp$score)] -->
+
+<!--     # Save file -->
+<!--     s_condition <- metadata$condition[metadata$sample == s] -->
+<!--     f_name <- paste0("RPE_", s_condition, "_vs_", base_condition, ".bw") -->
+<!--     export.bw(tmp, file.path(bigwig_dir, f_name)) -->
+
+<!--   } -->
+
+<!-- } -->
+
+<!-- # Save tracks -->
+<!-- bigwig_dir <- file.path(output_dir, "bigwig") -->
+
+<!-- MakeDifferenceTracks(gr_padamid_combined, padamid_metadata_cellcycle, "RPE_0h_Ki67", -->
+<!--                      bigwig_dir) -->
+<!-- MakeDifferenceTracks(gr_padamid_combined, padamid_metadata_cellcycle, "RPE_1h_Ki67", -->
+<!--                      bigwig_dir) -->
+<!-- MakeDifferenceTracks(gr_padamid_combined, padamid_metadata_cellcycle, "RPE_wt_Ki67", -->
+<!--                      bigwig_dir) -->
+
+<!-- ``` -->
+
+
+### 5. Mitosis pattern in more detail
+
+
+```{r mitosis scatter plots, cache = T, fig.width = 5, fig.height = 3.5}
+
+tib <- tib_padamid_cellcycle
+
+# Scatter plots
+PlotScatter(tib, "RPE_0h_Ki67", "RPE_1h_Ki67", identity = T)
+
+PlotScatter(tib, "RPE_0h_Ki67", "RPE_wt_H3K27me3", identity = T)
+PlotScatter(tib, "RPE_0h_Ki67", "RPE_wt_H3K9me3", identity = T)
+
+PlotScatter(tib, "RPE_1h_Ki67", "RPE_wt_H3K27me3", identity = T)
+PlotScatter(tib, "RPE_1h_Ki67", "RPE_wt_H3K9me3", identity = T)
+
+
+# Combining telomeres distance and histone modifications 
+PlotScatter(tib, "distance_to_centromere", "RPE_0h_Ki67", xlimits = c(0, 50))
+PlotScatter(tib, "distance_to_centromere", "RPE_0h_Ki67", xlimits = c(0, 50), 
+            color_by = tib$RPE_wt_H3K27me3)
+PlotScatter(tib, "distance_to_centromere", "RPE_0h_Ki67", xlimits = c(0, 50), 
+            color_by = tib$RPE_wt_H3K9me3)
+
+PlotScatter(tib, "distance_to_telomere", "RPE_0h_Ki67", xlimits = c(0, 50))
+PlotScatter(tib, "distance_to_telomere", "RPE_0h_Ki67", xlimits = c(0, 50), 
+            color_by = tib$RPE_wt_H3K27me3)
+PlotScatter(tib, "distance_to_telomere", "RPE_0h_Ki67", xlimits = c(0, 50), 
+            color_by = tib$RPE_wt_H3K9me3)
+
+PlotScatter(tib, "distance_to_telomere", "RPE_0h_Ki67", xlimits = c(0, 50), 
+            smooth_line = T)
+PlotScatter(tib, "distance_to_telomere", "RPE_0h_Ki67", xlimits = c(0, 50), 
+            color_by = tib$RPE_wt_H3K27me3, smooth_line = T)
+PlotScatter(tib, "distance_to_telomere", "RPE_0h_Ki67", xlimits = c(0, 50), 
+            color_by = tib$RPE_wt_H3K9me3, smooth_line = T)
+
+PlotScatter(tib, "distance_to_telomere", "RPE_0h_Ki67", xlimits = c(0, 50), 
+            color_by = tib$RPE_wt_H3K27me3, smooth_seqnames = T)
+
+
+# Repeat for t=1h
+PlotScatter(tib, "distance_to_centromere", "RPE_1h_Ki67", xlimits = c(0, 50))
+PlotScatter(tib, "distance_to_centromere", "RPE_1h_Ki67", xlimits = c(0, 50), 
+            color_by = tib$RPE_wt_H3K27me3)
+PlotScatter(tib, "distance_to_centromere", "RPE_1h_Ki67", xlimits = c(0, 50), 
+            color_by = tib$RPE_wt_H3K9me3)
+
+PlotScatter(tib, "distance_to_telomere", "RPE_1h_Ki67", xlimits = c(0, 50))
+PlotScatter(tib, "distance_to_telomere", "RPE_1h_Ki67", xlimits = c(0, 50), 
+            color_by = tib$RPE_wt_H3K27me3)
+PlotScatter(tib, "distance_to_telomere", "RPE_1h_Ki67", xlimits = c(0, 50), 
+            color_by = tib$RPE_wt_H3K9me3)
+
+PlotScatter(tib, "distance_to_telomere", "RPE_1h_Ki67", xlimits = c(0, 50), 
+            smooth_line = T)
+PlotScatter(tib, "distance_to_telomere", "RPE_1h_Ki67", xlimits = c(0, 50), 
+            color_by = tib$RPE_wt_H3K27me3, smooth_line = T)
+PlotScatter(tib, "distance_to_telomere", "RPE_1h_Ki67", xlimits = c(0, 50), 
+            color_by = tib$RPE_wt_H3K9me3, smooth_line = T)
+
+PlotScatter(tib, "distance_to_telomere", "RPE_1h_Ki67", xlimits = c(0, 50), 
+            color_by = tib$RPE_wt_H3K27me3, smooth_seqnames = T)
+
+
+```
+
+```{r mitosis scatter plots with facets, cache = T, fig.width = 8, fig.height = 8}
+
+PlotScatter(tib, "distance_to_telomere", "RPE_0h_Ki67", xlimits = c(0, 50), 
+            color_by = tib$RPE_wt_H3K27me3, smooth_line = T, facet_seqnames = T)
+
+```
+
+```{r mitosis binned scatter plots, cache = T, fig.width = 5, fig.height = 3.5}
+
+# t=0h
+PlotScatterBinned(tib, "distance_to_telomere", "RPE_0h_Ki67", xlimits = c(0, 50),
+                  smooth_line = T, limits_count = c(0, 100))
+PlotScatterBinned(tib, "distance_to_telomere", "RPE_0h_Ki67", xlimits = c(0, 50), 
+                  color_by = tib$RPE_wt_H3K27me3, ylimits_col = c(-1.8, 1.8))
+PlotScatterBinned(tib, "distance_to_telomere", "RPE_0h_Ki67", xlimits = c(0, 50), 
+                  color_by = tib$RPE_wt_H3K9me3, ylimits_col = c(-2, 2))
+
+# t=1h
+PlotScatterBinned(tib, "distance_to_telomere", "RPE_1h_Ki67", xlimits = c(0, 50),
+                  smooth_line = T, limits_count = c(0, 100))
+PlotScatterBinned(tib, "distance_to_telomere", "RPE_1h_Ki67", xlimits = c(0, 50), 
+                  color_by = tib$RPE_wt_H3K27me3, ylimits_col = c(-1.8, 1.8))
+PlotScatterBinned(tib, "distance_to_telomere", "RPE_1h_Ki67", xlimits = c(0, 50), 
+                  color_by = tib$RPE_wt_H3K9me3, ylimits_col = c(-2, 2))
+
+
+# Prepare smooth line of all telomere distances separately
+tib %>%
+  dplyr::select(seqnames, distance_to_telomere, RPE_0h_Ki67) %>%
+  drop_na() %>%
+  filter(distance_to_telomere < 55) %>%
+  mutate(seqnames = factor(seqnames, chrom_sizes$seqnames)) %>%
+  ggplot(aes(x = distance_to_telomere, y = RPE_0h_Ki67, col = seqnames)) +
+  geom_smooth(method = "loess", se = F, span = 10) +
+  geom_vline(xintercept = 0) +
+  #geom_vline(xintercept = 25, linetype = "dashed") +
+  geom_hline(yintercept = 0) +
+  coord_cartesian(xlim = c(0, 50),
+                  ylim = c(-0.5, 2)) +
+  theme_bw() +
+  theme(aspect.ratio = 1)  
+
+```
+
+### 6. Comparison with lamina changes during the cell cycle
+
+```{r compare with dynamic lads, cache = T, fig.width = 8, fig.height = 3.5}
+
+# Load dynamic LADs
+dynamic_lads <- read_rds("~/mydata/proj/tests/results/ts190509_RPE_shakeOff/ts190802_differential_analysis_BinsandLADs_RPE/LADs.rds")
+dynamic_results <- read_rds("~/mydata/proj/tests/results/ts190509_RPE_shakeOff/ts190802_differential_analysis_BinsandLADs_RPE/LADs_results.rds")
+
+dynamic_lads$result <- as.vector(dynamic_results[, 2])
+
+# Calculate change of Ki67 on dynamic LADs
+ovl <- findOverlaps(gr_padamid_combined, dynamic_lads, select = "arbitrary")
+
+tib_lads <- tib %>%
+  dplyr::select(-start, -end, -contains("distance")) %>%
+  mutate(match = findOverlaps(as(tib, "GRanges"), 
+                              dynamic_lads, select = "arbitrary"),
+         lad_result = dynamic_lads$result[match],
+         lad_result = case_when(lad_result == 1 ~ "up",
+                                lad_result == -1 ~ "down",
+                                T ~ "stable"),
+         lad_result = factor(lad_result, c("down", "stable", "up"))) %>%
+  drop_na(match) %>%
+  gather(key, value, contains("RPE")) %>%
+  group_by(seqnames, key, match, lad_result) %>%
+  dplyr::summarise(mean = mean(value, na.rm = T)) %>%
+  ungroup() %>%
+  spread(key, mean) %>%
+  drop_na()
+
+
+# 1) Plot scores at early time points
+tib_lads %>%
+  dplyr::select(lad_result, RPE_0h_Ki67, RPE_1h_Ki67, RPE_3h_Ki67) %>%
+  gather(key, value, -lad_result) %>%
+  mutate(key = factor(key, unique(key))) %>%
+  ggplot(aes(x = lad_result, y = value, col = lad_result)) + 
+  geom_quasirandom() +
+  #geom_boxplot(outlier.shape = NA, fill = NA, col = "black") +
+  stat_summary(fun.data = quantiles, geom = "boxplot", fill = NA, col = "black") +
+  geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+  facet_grid(. ~ key) +
+  scale_color_brewer(palette = "Dark2", guide = F) +
+  xlab("LAD class") +
+  ylab("Ki67 t=0h") +
+  theme_bw() +
+  theme(aspect.ratio = 1,
+        axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+# 2) Plot differences at dynamic lads
+tib_lads %>%
+  mutate(RPE_3h_Ki67 = RPE_3h_Ki67 - RPE_1h_Ki67,
+         RPE_6h_Ki67 = RPE_6h_Ki67 - RPE_1h_Ki67,
+         RPE_10h_Ki67 = RPE_10h_Ki67 - RPE_1h_Ki67) %>%
+  dplyr::select(lad_result, RPE_3h_Ki67, RPE_6h_Ki67, RPE_10h_Ki67) %>%
+  gather(key, value, -lad_result) %>%
+  mutate(key = factor(key, unique(key))) %>%
+  ggplot(aes(x = lad_result, y = value, col = lad_result)) + 
+  geom_quasirandom() +
+  #geom_boxplot(outlier.shape = NA, fill = NA, col = "black") +
+  stat_summary(fun.data = quantiles, geom = "boxplot", fill = NA, col = "black") +
+  geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+  facet_grid(. ~ key) +
+  scale_color_brewer(palette = "Dark2", guide = F) +
+  xlab("LAD class") +
+  ylab("Ki67 difference with t=1h") +
+  theme_bw() +
+  theme(aspect.ratio = 1,
+        axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+There is no simple correlation of increasing LaminB1 and decreasing Ki67 
+signals, and vice-versa, during the cell cycle. I think that this is due to the
+combination of aspects that determine the interaction patterns. In the other
+analyses, I can consistently find evidence that LaminB1 and Ki67 have opposite
+behaviour.
+
+
+### Conclusions
+
+Several conclusions:
+
+  * Ki67 interactions are widely spread early in G1 and mature towards small
+    chromosomes.
+  * Ki67 is enriched at the chromosome ends during mitosis / metaphase. Not sure
+    why.
+  * It seems that this enrichment scales with chromosome size. It could thus 
+    be related to the arms that escape the chromosomal mass, but also due to
+    encapsulation of these ends. 
+  * While the correlation with H3K9me3-marked chromatin is lost, the anti 
+    correlation with H3K27me3 remains.
+  * The enrichment on chromosomal arms can of course also be a technical 
+    artifact from the pA-DamID procedure.
+
+
+
+### Session info
+
+```{r save data}
+
+
+
+```
+
+```{r session info}
+sessionInfo()
+```
+

@@ -1,0 +1,1374 @@
+---
+title: "4DN DamID - Ki67 project - HCT116 Ki67-AID Hi-C"
+author: "Tom van Schaik"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output: 
+  html_document:
+    theme: journal #cerulean
+    highlight: monochrome
+    toc: true
+    toc_float: true
+    code_folding: show
+  editor_options:
+    chunk_output_type: console
+---
+
+### Project
+
+Mapping of Ki67 interactions with the genome and comparison with lamina 
+interactions.
+
+
+### Introduction
+
+Various analyses of HCT116 cells before and after Ki67 loss using a Ki67-AID
+degron system.
+
+In this document, specifically Hi-C data.
+
+
+### Method
+
+NA
+
+
+### Set-up
+
+Set the parameters and list the data.
+
+```{r set-up, warning = F, message = F, cache = T}
+
+# Load dependencies - without warnings / messages
+library(tidyverse)
+library(GenomicRanges)
+library(rtracklayer)
+library(ggplot2)
+library(RColorBrewer)
+library(GGally)
+library(corrr)
+library(caTools)
+library(ggrastr)
+library(colorspace)
+library(GENOVA)
+
+# Prepare output 
+output_dir <- "ts220520_11_hct116_ki67_aid_hic"
+dir.create(output_dir, showWarnings = FALSE)
+
+
+# Load input
+chromosomes <- c(paste0("chr", 1:22), "chrX")
+
+
+input_dir <- "ts220503_1_data_gathering"
+
+bin_size <- readRDS(file.path(input_dir, "bin_size.rds"))
+centromeres <- readRDS(file.path(input_dir, "centromeres.rds"))
+
+colors_set1 <- readRDS(file.path(input_dir, "colors_set1.rds"))
+colors_set2 <- readRDS(file.path(input_dir, "colors_set2.rds"))
+colors_set3 <- readRDS(file.path(input_dir, "colors_set3.rds"))
+
+tib_padamid_replicates <- readRDS(file.path(input_dir, 
+                                            "tib_padamid_replicates.rds"))
+tib_padamid_combined <- readRDS(file.path(input_dir, 
+                                          "tib_padamid_combined.rds"))
+
+gr_padamid_replicates <- readRDS(file.path(input_dir, 
+                                           "gr_padamid_replicates.rds"))
+gr_padamid_combined <- readRDS(file.path(input_dir, 
+                                         "gr_padamid_combined.rds"))
+
+tib_hmm_replicates <- readRDS(file.path(input_dir, "tib_hmm_replicates.rds"))
+tib_hmm_combined <- readRDS(file.path(input_dir, "tib_hmm_combined.rds"))
+
+padamid_metadata_replicates <- readRDS(file.path(input_dir, 
+                                                 "padamid_metadata_replicates.rds"))
+padamid_metadata_combined <- readRDS(file.path(input_dir, 
+                                               "padamid_metadata_combined.rds"))
+
+
+
+# Prepare seqnames
+chrom_sizes <- tibble(seqnames = seqlevels(gr_padamid_combined),
+                      length = seqlengths(gr_padamid_combined)) %>%
+  arrange(-length)
+
+
+# Scale pA-DamID scores?
+tib_padamid_combined_scaled <- tib_padamid_combined %>%
+  mutate_at(4:ncol(.), function(x) scale(x)[, 1]) %>%
+  filter(seqnames != "chrY")
+
+```
+
+```{r knits setup}
+library(knitr)
+opts_chunk$set(fig.width = 5, fig.height = 3.5, cache = T,
+               dev=c('png', 'pdf'), fig.path = file.path(output_dir, "figures/")) 
+pdf.options(useDingbats = FALSE)
+```
+
+```{r functions}
+
+PlotScatterBinned <- function(tib, n1, n2, color_by = NULL, identity = F, 
+                              n_min = 10, ylimits_col = c(-2.4, 2.4),
+                              count_range = c(0, 400), smooth = 1, n_bins = 50,
+                              remove_outliers = F, midpoint_col = 0,
+                              linear_gradient = F) {
+  # Get tibble
+  tib_process <- tib %>%
+    dplyr::select(seqnames, all_of(n1), all_of(n2)) %>%
+    rename_all(~ c("seqnames", "n1", "n2"))
+  
+  # Calculate pearson correlation without any smoothing
+  tib_cor <- round(cor(tib_process$n1, tib_process$n2, use = "complete.obs",
+                       method = "pearson"), 2)
+  
+  if (smooth > 1) {
+    tib_process <- tib_process %>%
+      group_by(seqnames) %>%
+      mutate(n1 = runmean(n1, k = smooth),
+             n2 = runmean(n2, k = smooth))
+  }
+  
+  
+  if (! is.null(color_by)) {
+    tib_process <- tib_process %>%
+      add_column(color = color_by)
+  }
+  
+  tib_process <- tib_process %>%
+    drop_na()
+  
+  # Change color range
+  if (! is.null(color_by)) {
+    limits_color <- quantile(tib_process$color, c(0.001, 0.999), na.rm = T)
+    tib_process$color[tib_process$color < limits_color[1]] <- limits_color[1]
+    tib_process$color[tib_process$color > limits_color[2]] <- limits_color[2]
+  }
+  
+  # Replace outliers
+  if (remove_outliers) {
+    tib_process <- tib_process %>%
+      mutate(n1 = case_when(n1 > quantile(n1, 0.999) ~ quantile(n1, 0.999),
+                            n1 < quantile(n1, 0.001) ~ quantile(n1, 0.001),
+                            T ~ n1),
+             n2 = case_when(n2 > quantile(n2, 0.999) ~ quantile(n2, 0.999),
+                            n2 < quantile(n2, 0.001) ~ quantile(n2, 0.001),
+                            T ~ n2))
+  }
+  
+  # Metrics
+  n1_min = min(tib_process$n1) - 0.001
+  n1_max = max(tib_process$n1) + 0.001
+  n1_binsize <- (n1_max - n1_min) / (n_bins-1)
+  
+  n2_min = min(tib_process$n2) - 0.001
+  n2_max = max(tib_process$n2) + 0.001
+  n2_binsize <- (n2_max - n2_min) / (n_bins-1)
+  
+  tib_summary <- tib_process %>%
+    mutate(n1_cut = cut(n1, 
+                        seq(n1_min, n1_max, length.out = n_bins)),
+           n2_cut = cut(n2, 
+                        seq(n2_min, n2_max, length.out = n_bins))) %>%
+    mutate(n1_bin = as.numeric(as.factor(n1_cut)),
+           n2_bin = as.numeric(as.factor(n2_cut))) %>%
+    mutate(n1_bin = n1_min - n1_binsize/2 + n1_bin * n1_binsize,
+           n2_bin = n2_min - n2_binsize/2 + n2_bin * n2_binsize) %>%
+    group_by(n1_bin, n2_bin)
+  
+  # Plot
+  if (! is.null(color_by)) {
+    tib_summary <- tib_summary %>%
+    dplyr::summarise(n = n(),
+                     mark = mean(color)) %>%
+    ungroup() %>%
+    filter(n >= n_min)
+    
+    plt <- tib_summary %>%
+      ggplot(aes(x = n1_bin, y = n2_bin)) +
+      geom_tile(aes(fill = mark))
+    
+    if (linear_gradient) {
+      plt <- plt +
+        scale_fill_gradient(low = "darkred", high = "grey80",
+                            limits = ylimits_col, 
+                            na.value = "green")
+    } else {
+      plt <- plt +
+        scale_fill_gradient2(low = "blue", mid = "grey", high = "red",
+                             midpoint = midpoint_col, limits = ylimits_col, 
+                             na.value = "green")
+    }
+      
+  } else {
+    tib_summary <- tib_summary %>%
+    dplyr::summarise(n = n()) %>%
+    ungroup() %>%
+    filter(n >= n_min)
+    
+    plt <- tib_summary %>%
+      ggplot(aes(x = n1_bin, y = n2_bin)) +
+      geom_tile(aes(fill = n)) +
+      scale_fill_gradient(low = "lightgrey", high = "black", name = "Count",
+                          limits = count_range, na.value = "green")
+  }
+  
+  plt <- plt + 
+    geom_hline(yintercept = 0, linetype = "dashed", col = "black") +
+    geom_vline(xintercept = 0, linetype = "dashed", col = "black") +
+    xlab(n1) +
+    ylab(n2) +
+    ggtitle(paste0("Pearson: ", tib_cor)) +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+  
+  if (identity) plt <- plt + geom_abline(slope = 1, intercept = 0, 
+                                         col = "black", linetype = "dashed")
+  
+  plot(plt)
+  
+}
+
+```
+
+
+### 1. Prepare data
+
+Load Hi-C data.
+
+```{r prepare hic metadata}
+
+dir_hic <- "results_HiC"
+
+metadata_hic <- tibble(file = dir(dir_hic, 
+                                  pattern = "matrix")) %>%
+  mutate(condition = ifelse(grepl("mitotic", file),
+                            "mitosis", "interphase"),
+         replicate = ifelse(grepl("05|06", file),
+                            "r2", "r1"),
+         class = ifelse(grepl("plusIAA", file),
+                        "plusIAA", "minusIAA"),
+         sample = paste(condition, replicate, class, sep = "_"),
+         colour = ifelse(class == "plusIAA",
+                         "red", "black")) %>%
+  mutate(condition = factor(condition,
+                            levels = c("interphase", "mitosis")),
+         replicate = factor(replicate,
+                            levels = c("r1", "r2")),
+         class = factor(class,
+                        levels = c("minusIAA", "plusIAA"))) %>%
+  arrange(condition, replicate, class) %>%
+  mutate(sample = factor(sample,
+                         levels = unique(sample)))
+
+index_file <- dir(dir_hic, pattern = "bed")
+
+```
+
+```{r load hic data, cache.lazy = F}
+
+df_centromeres <- data.frame(centromeres)[, 1:3]
+df_centromeres$seqnames <- as.character(df_centromeres$seqnames)
+
+list_hic <- purrr::imap(metadata_hic$file,
+            function(f, i) {
+              load_contacts(signal_path = file.path(dir_hic, 
+                                                    f), 
+                            indices_path = file.path(dir_hic, 
+                                                     index_file), 
+                            sample_name = as.character(metadata_hic$sample[i]), 
+                            centromeres = df_centromeres, 
+                            colour = metadata_hic$colour[i], 
+                            verbose = F)
+            })
+
+names(list_hic) <- as.character(metadata_hic$sample)
+
+```
+
+
+### 2. Basic plots 
+
+Cis/trans ratio.
+
+```{r cistrans ratio}
+
+# Get cis-trans
+tib_cistrans <- cis_trans(list_hic) %>% as_tibble()
+
+# Plot cis-trans
+tib_cistrans %>%
+  full_join(metadata_hic) %>%
+  ggplot(aes(x = replicate, 
+             y = 100 - cis, 
+             fill = class)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_grid(. ~ condition, scales = "free_x", space = "free_x") +
+  scale_fill_manual(values = c("black", "red")) +
+  xlab("Replicate experiment") +
+  ylab("% trans-interactions") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+```
+
+Relative contact probability.
+
+```{r rcp}
+
+# Run RCP
+RCP_out <- RCP(explist = list_hic)
+
+tib_RCP <- as_tibble(RCP_out$smooth) %>%
+  mutate(sample = samplename) %>%
+  left_join(metadata_hic)
+
+# Plot  
+tib_RCP %>%
+  ggplot(aes(x = distance / 1e6, y = P, 
+             col = class, linetype = condition,
+             group = interaction(replicate, class, condition))) +
+  geom_line() +
+  scale_x_log10() +
+  scale_y_log10() +
+  scale_color_manual(values = c("black", "red")) +
+  xlab("Distance (Mb)") +
+  ylab("P") +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+```
+
+### 3. Compartment score
+
+```{r compartment score, fig.width = 7}
+
+# Active peaks
+active_peaks <- read_tsv("../ts200705_analyses_4DN_project/ts200705_data/HCT116/HCT116_SPIN_25kb_hg38_202001.bed", 
+                         col_names = c("seqnames", "start", "end", "state")) %>%
+  filter(grepl("Act", state)) %>%
+  dplyr::select(-state) %>%
+  mutate(start = start + 1)
+  
+CS_out = compartment_score(list_hic[1:2],
+                           bed = active_peaks)
+CS_out_r2 = compartment_score(list_hic[3:4],
+                              bed = active_peaks)
+CS_out_mit = compartment_score(list_hic[5:6],
+                               bed = active_peaks)
+
+visualise(CS_out, chr = "chr11")
+
+
+# Plot all scores to verify that scores are not flipped
+as_tibble(CS_out$compart_scores) %>%
+  gather(key, value, contains("IAA")) %>%
+  ggplot(aes(x = bin, y = value, color = key)) +
+  rasterize(geom_line(),
+            dpi = 300) +
+  coord_cartesian(ylim = c(-2.5, 2.5)) +
+  scale_color_manual(values = c("black", "red"), 
+                     guide = "none") +
+  theme_bw() +
+  theme(aspect.ratio = 1/4)
+
+as_tibble(CS_out_r2$compart_scores) %>%
+  gather(key, value, contains("IAA")) %>%
+  ggplot(aes(x = bin, y = value, color = key)) +
+  rasterize(geom_line(),
+            dpi = 300) +
+  coord_cartesian(ylim = c(-2.5, 2.5)) +
+  scale_color_manual(values = c("black", "red"), 
+                     guide = "none") +
+  theme_bw() +
+  theme(aspect.ratio = 1/4)
+
+as_tibble(CS_out_mit$compart_scores) %>%
+  gather(key, value, contains("IAA")) %>%
+  ggplot(aes(x = bin, y = value, color = key)) +
+  rasterize(geom_line(),
+            dpi = 300) +
+  coord_cartesian(ylim = c(-2.5, 2.5)) +
+  scale_color_manual(values = c("black", "red"), 
+                     guide = "none") +
+  theme_bw() +
+  theme(aspect.ratio = 1/4)
+
+# And also as scatter plots
+as_tibble(CS_out$compart_scores) %>%
+  ggplot(aes(x = interphase_r1_minusIAA, y = interphase_r1_plusIAA)) +
+  rasterize(geom_point(alpha = 0.2, size = 1),
+            dpi = 300) +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+as_tibble(CS_out_r2$compart_scores) %>%
+  ggplot(aes(x = interphase_r2_minusIAA, y = interphase_r2_plusIAA)) +
+  rasterize(geom_point(alpha = 0.2, size = 1),
+            dpi = 300) +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+as_tibble(CS_out_mit$compart_scores) %>%
+  ggplot(aes(x = mitosis_r1_minusIAA, y = mitosis_r1_plusIAA)) +
+  rasterize(geom_point(alpha = 0.2, size = 1),
+            dpi = 300) +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+```
+
+```{r saddle analysis}
+
+saddle_out = saddle(list_hic[1:2], 
+                    CS_discovery = CS_out,
+                    bins = 50)
+
+visualise(saddle_out)
+
+saddle_out = saddle(list_hic[3:4], 
+                    CS_discovery = CS_out_r2,
+                    bins = 50)
+
+visualise(saddle_out)
+
+saddle_out = saddle(list_hic[5:6], 
+                    CS_discovery = CS_out_mit,
+                    bins = 50)
+
+visualise(saddle_out)
+
+```
+
+### 4. Cis interactions
+
+```{r cis interaction plots, fig.width = 6, fig.height = 6}
+
+# Overview
+compartment_matrixplot(
+  exp1 = list_hic[[1]],
+  exp2 = list_hic[[2]],
+  CS_discovery = CS_out,
+  chrom = "chr3", arm = "q",
+  rasterise = T,
+  colour_lim = c(0, 150),
+  colour_bar = T
+)
+
+compartment_matrixplot(
+  exp1 = list_hic[[3]],
+  exp2 = list_hic[[4]],
+  CS_discovery = CS_out_r2,
+  chrom = "chr3", arm = "q",
+  rasterise = T,
+  colour_lim = c(0, 150),
+  colour_bar = T
+)
+
+compartment_matrixplot(
+  exp1 = list_hic[[5]],
+  exp2 = list_hic[[6]],
+  CS_discovery = CS_out_mit,
+  chrom = "chr3", arm = "q",
+  rasterise = T,
+  colour_lim = c(0, 150),
+  colour_bar = T
+)
+
+
+# Overview - rDNA chromosome
+compartment_matrixplot(
+  exp1 = list_hic[[1]],
+  exp2 = list_hic[[2]],
+  CS_discovery = CS_out,
+  chrom = "chr13", arm = "q",
+  rasterise = T,
+  colour_lim = c(0, 150),
+  colour_bar = T
+)
+
+compartment_matrixplot(
+  exp1 = list_hic[[3]],
+  exp2 = list_hic[[4]],
+  CS_discovery = CS_out_r2,
+  chrom = "chr13", arm = "q",
+  colour_lim = c(0, 150),
+  colour_bar = T
+)
+
+compartment_matrixplot(
+  exp1 = list_hic[[5]],
+  exp2 = list_hic[[6]],
+  CS_discovery = CS_out_mit,
+  chrom = "chr13", arm = "q",
+  rasterise = T,
+  colour_lim = c(0, 150),
+  colour_bar = T
+)
+
+
+
+
+# Zoom
+hic_matrixplot(exp1 = list_hic[[1]],
+               exp2 = list_hic[[2]],
+               chrom = 'chr3',
+               start = 0e6,
+               end = 198e6, 
+               cut.off = 25,
+               rasterise = T,
+               colour_bar = T)
+
+
+hic_matrixplot(exp1 = list_hic[[1]],
+               exp2 = list_hic[[2]],
+               coplot = 'diff',
+               chrom = 'chr3',
+               start = 0e6,
+               end = 198e6, 
+               cut.off = 25,
+               rasterise = T, 
+               colour_bar = T)
+
+# Zoom - mitotic
+hic_matrixplot(exp1 = list_hic[[5]],
+               exp2 = list_hic[[6]],
+               chrom = 'chr3',
+               start = 0e6,
+               end = 198e6, 
+               cut.off = 25,
+               rasterise = T,
+               colour_bar = T)
+
+
+hic_matrixplot(exp1 = list_hic[[5]],
+               exp2 = list_hic[[6]],
+               coplot = 'diff',
+               chrom = 'chr3',
+               start = 0e6,
+               end = 198e6, 
+               cut.off = 25,
+               rasterise = T, 
+               colour_bar = T)
+
+# Zoom - all centromeres
+for (chr_plot in c(paste0("chr", 1:22), "chrX")) {
+  
+  hic_matrixplot(exp1 = list_hic[[1]],
+                 exp2 = list_hic[[2]],
+                 chrom = chr_plot,
+                 start = start(centromeres[seqnames(centromeres) == chr_plot]) - 5e6,
+                 end = end(centromeres[seqnames(centromeres) == chr_plot]) + 5e6, 
+                 cut.off = 1500,
+                 rasterise = T)
+  
+}
+
+```
+
+
+### 5. Between left and right of centromeres
+
+Are there more genome interactions across centromeres?
+
+```{r centromeres as roadblock, fig.width = 7}
+
+# Define regions of interest
+centromeres_left <- flank(centromeres, width = 2e6, start = T)
+centromeres_right <- flank(centromeres, width = 2e6, start = F)
+
+# Select regions of interest in data
+bins <- list_hic[[1]]$IDX
+bins <- as_tibble(bins, 
+                  .name_repair = ~ c("seqnames", "start", "end", "idx"))
+
+bins <- bins[overlapsAny(as(bins, "GRanges"),
+                         c(centromeres,
+                           centromeres_left,
+                           centromeres_right)), ]
+
+bins_left <- bins[overlapsAny(as(bins, "GRanges"),
+                              centromeres_left), ]
+
+# Get data
+GetCentromereBins <- function(i) {
+  x <- as_tibble(list_hic[[i]]$MAT, 
+                 .name_repair = ~ c("idx1", "idx2", "score")) %>%
+    filter(idx1 %in% bins$idx &
+             idx2 %in% bins$idx) %>%
+    mutate(seqnames1 = bins$seqnames[match(idx1, bins$idx)],
+           seqnames2 = bins$seqnames[match(idx2, bins$idx)]) %>%
+    filter(seqnames1 == seqnames2) %>%
+    mutate(idx1_left = idx1 %in% bins_left$idx,
+           idx2_left = idx2 %in% bins_left$idx) %>%
+    filter(idx1_left != idx2_left) %>%
+    rename_at(3, ~ as.character(metadata_hic$sample[i]))
+  x
+}
+
+x <- purrr::map(1:6, 
+                function(i) GetCentromereBins(i)) %>%
+  purrr::reduce(full_join)
+
+# Summarize - only with complete observations
+x %>% 
+  #drop_na() %>%
+  gather(sample, value, contains("IAA")) %>%
+  group_by(sample, seqnames1) %>%
+  dplyr::summarise(value = sum(value, na.rm = T)) %>%
+  ungroup() %>%
+  left_join(metadata_hic) %>%
+  mutate(experiment = paste0(condition, "_", replicate)) %>%
+  dplyr::select(seqnames1, value, experiment, class) %>%
+  spread(class, value) %>%
+  
+  # And plot
+  ggplot(aes(x = minusIAA, y = plusIAA)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, col = "grey60", linetype = "dashed") +
+  facet_grid(. ~ experiment) +
+  ggtitle("Interactions across centromere (2 Mb each side)") +
+  scale_x_log10() +
+  scale_y_log10() +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+```
+
+Okay, let's not bother explaining this in much detail. Conclusion: there is no
+increased insulation across centromeres when you remove Ki-67. Not unexpected
+given that the Hi-C matrices are almost identical.
+
+How about trans-interactions near centromeres?
+
+```{r centromere trans-interactions}
+
+# Select data
+GetCentromereBins <- function(i) {
+  x <- as_tibble(list_hic[[i]]$MAT, 
+                 .name_repair = ~ c("idx1", "idx2", "score")) %>%
+    filter(idx1 %in% bins$idx &
+             idx2 %in% bins$idx) %>%
+    mutate(seqnames1 = bins$seqnames[match(idx1, bins$idx)],
+           seqnames2 = bins$seqnames[match(idx2, bins$idx)]) %>%
+    filter(seqnames1 != seqnames2) %>%
+    rename_at(3, ~ as.character(metadata_hic$sample[i]))
+  x
+}
+
+x <- purrr::map(1:6, 
+                function(i) GetCentromereBins(i)) %>%
+  purrr::reduce(full_join)
+
+# Summarize - only with complete observations
+x %>% 
+  #drop_na() %>%
+  gather(sample, value, contains("IAA")) %>%
+  group_by(sample, seqnames1, seqnames2) %>%
+  dplyr::summarise(value = sum(value, na.rm = T)) %>%
+  ungroup() %>%
+  left_join(metadata_hic) %>%
+  mutate(experiment = paste0(condition, "_", replicate)) %>%
+  dplyr::select(seqnames1, seqnames2, value, experiment, class) %>%
+  spread(class, value) %>%
+  
+  # And plot
+  ggplot(aes(x = minusIAA, y = plusIAA)) +
+  rasterize(geom_point(alpha = 0.2, size = 1),
+            dpi = 300) +
+  geom_abline(slope = 1, intercept = 0, 
+              col = "red", linetype = "dashed") +
+  facet_grid(. ~ experiment) +
+  ggtitle("Trans-interactions between centromeres (2 Mb each side)") +
+  scale_x_log10() +
+  scale_y_log10() +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+```
+
+No effect on this.
+
+
+### 6. Interactions between Ki-67 and Lamin B1 regions
+
+The data shows that some late-replicating regions are more at the lamina and
+others at Ki-67 / the nucleolus. Therefore, one of our predictions for the Hi-C
+data was an increased interaction between regions that originally were at 
+Ki-67 / the nucleolus with regions at the lamina. Let's test this.
+
+To do so, let's take a simplistic approach: divide the hammerhead in two and
+create a RCP-like plot for these interactions.
+
+```{r RCPlike for Ki67bound regions, fig.width = 7}
+
+# First of all, add the Ki67 / LaminB1 scores to the Hi-C bins
+bins <- list_hic[[1]]$IDX
+bins <- as_tibble(bins, 
+                  .name_repair = ~ c("seqnames", "start", "end", 
+                                     "subjectHits")) %>%
+  mutate(start = start + 1)
+
+tib <- as_tibble(findOverlaps(as(tib_padamid_combined, "GRanges"),
+                              as(bins, "GRanges"))) %>%
+  bind_cols(tib_padamid_combined[.$queryHits, ] %>%
+              dplyr::select(matches("HCT116.*AID.*double"))) %>%
+  dplyr::select(-queryHits) %>%
+  group_by(subjectHits) %>%
+  dplyr::summarise_all(mean, na.rm = T)
+
+# Also, add a bit of smoothing
+bins <- bins %>%
+  full_join(tib) %>%
+  mutate_at(vars(contains("HCT116")), 
+            function(x) runmean(x, k = 3))
+
+
+# Next, extract regions in the hammer-head, and visualize
+bins <- bins %>%
+  mutate(type = case_when(HCT116_AID_doublethy_Ki67 > 0.5 &
+                            HCT116_AID_doublethy_LMNB1 < 0.4 ~ "ki67",
+                          HCT116_AID_doublethy_LMNB1 > 0.8 &
+                            HCT116_AID_doublethy_Ki67 < 0.3 ~ "laminb1",
+                          T ~ "-"))
+
+bins %>%
+  ggplot(aes(x = HCT116_AID_doublethy_Ki67, 
+             y = HCT116_AID_doublethy_LMNB1,
+             col = type)) +
+  rasterize(geom_point(size = 1),
+            dpi = 300) +
+  geom_vline(xintercept = 0, col = "black", linetype = "dashed") +
+  geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+  scale_color_manual(values = c("grey60", "darkgreen", "blue")) +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+
+
+
+
+
+# Run RCP
+bins_ki67 <- bins %>% 
+  filter(type == "ki67") %>% 
+  dplyr::select(1:4) %>%
+  rename_at(4, ~ "idx")
+bins_laminb1 <- bins %>% 
+  filter(type == "laminb1") %>% 
+  dplyr::select(1:4) %>%
+  rename_at(4, ~ "idx")
+
+RCP_out <- RCP(explist = list_hic[1:4], 
+               bedlist = list(ki67 = bins_ki67 %>% 
+                                dplyr::select(1:3) %>% 
+                                as.data.frame(),
+                              laminb1 = bins_laminb1 %>% 
+                                dplyr::select(1:3) %>% 
+                                as.data.frame(),
+                              other = bins %>% 
+                                filter(type == "-") %>% 
+                                dplyr::select(1:3) %>% 
+                                as.data.frame()))
+
+tib_RCP <- as_tibble(RCP_out$smooth) %>%
+  mutate(sample = samplename) %>%
+  left_join(metadata_hic)
+
+# Plot  
+tib_RCP %>%
+  ggplot(aes(x = distance / 1e6, y = P, 
+             col = class, 
+             group = interaction(replicate, class, condition))) +
+  geom_line() +
+  facet_grid(. ~ region) +
+  scale_x_log10() +
+  scale_y_log10() +
+  scale_color_manual(values = c("black", "red")) +
+  xlab("Distance (Mb)") +
+  ylab("P") +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+
+
+# Now, the figure above is the RCP WITHIN the regions. However, I would like to
+# determine interactions BETWEEN the regions. 
+i <- 1
+
+GetBetweenBins <- function(i) {
+  
+  data <- as_tibble(list_hic[[i]]$MAT, 
+                    .name_repair = ~ c("idx1", "idx2", "score")) %>%
+    filter((idx1 %in% bins_ki67$idx &
+              idx2 %in% bins_laminb1$idx) |
+             (idx2 %in% bins_ki67$idx &
+                idx1 %in% bins_laminb1$idx)) %>%
+    mutate(bin1 = ifelse(idx1 %in% bins_ki67$idx, "ki67", "laminb1"),
+           bin2 = ifelse(idx2 %in% bins_ki67$idx, "ki67", "laminb1")) %>%
+    mutate(seqnames1 = bins$seqnames[match(idx1, bins$subjectHits)],
+           seqnames2 = bins$seqnames[match(idx2, bins$subjectHits)]) %>%
+    filter(seqnames1 == seqnames2) %>%
+    rename_at(3, ~ as.character(metadata_hic$sample[i]))
+  
+  data
+  
+}
+
+x <- purrr::map(1:4, 
+                function(i) GetBetweenBins(i)) %>%
+  purrr::reduce(full_join)
+
+x %>%
+  gather(sample, value, contains("IAA")) %>%
+  group_by(sample, seqnames1) %>%
+  dplyr::summarise(value = sum(value, na.rm = T)) %>%
+  ungroup() %>%
+  left_join(metadata_hic) %>%
+  mutate(experiment = paste0(condition, "_", replicate)) %>%
+  dplyr::select(seqnames1, value, experiment, class) %>%
+  spread(class, value) %>%
+  
+  # And plot
+  ggplot(aes(x = minusIAA, y = plusIAA)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, 
+              col = "red", linetype = "dashed") +
+  facet_grid(. ~ experiment) +
+  ggtitle("Interactions between Ki-67 and LaminB1 domains\n(per chromosome)") +
+  scale_x_log10() +
+  scale_y_log10() +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+
+```
+
+Next, use simple calculations as I've done before: the combined interactions
+between peri-centromeres and LADs.
+
+```{r interactions between LADs and centromeres}
+
+# Import from bed file
+LADs <- import("results/HMM/bin-50kb/HCT116_AID_doublethy_LMNB1-50kb-combined_AD.bed.gz")
+
+# Filter to be >5 Mb from centromeres and remove chrY
+LADs <- LADs[as_tibble(distanceToNearest(LADs, 
+                                         centromeres, 
+                                         select = "arbitrary")) %>%
+               pull("distance") > 5e6]
+LADs <- LADs[seqnames(LADs) != "chrY"]
+
+# Add LAD idx
+LADs$number <- 1:length(LADs)
+
+# Select Hi-C bins of interest
+bins <- list_hic[[1]]$IDX
+bins <- as_tibble(bins, 
+                  .name_repair = ~ c("seqnames", "start", "end", "idx"))
+
+bins_centromere <- bins[overlapsAny(as(bins, "GRanges"),
+                                    c(centromeres, 
+                                      centromeres_left,
+                                      centromeres_right)), ]
+
+bins_LADs <- bins[overlapsAny(as(bins, "GRanges"),
+                              LADs), ]
+bins_LADs$LAD_number <- as_tibble(findOverlaps(as(bins_LADs, "GRanges"),
+                                               LADs, 
+                                               select = "arbitrary")) %>%
+  pull(value)
+
+
+# Get data
+GetCentromereBins <- function(i) {
+  x <- as_tibble(list_hic[[i]]$MAT, 
+                 .name_repair = ~ c("idx1", "idx2", "score")) %>%
+    filter((idx1 %in% bins_centromere$idx & idx2 %in% bins_LADs$idx) |
+             (idx1 %in% bins_LADs$idx & idx2 %in% bins_centromere$idx)) %>%
+    mutate(seqnames1 = bins$seqnames[match(idx1, bins$idx)],
+           seqnames2 = bins$seqnames[match(idx2, bins$idx)]) %>%
+    filter(seqnames1 == seqnames2) %>%
+    mutate(LAD_left = idx1 %in% bins_LADs$idx,
+           LAD_number = case_when(LAD_left == T ~ bins_LADs$LAD_number[match(idx1, bins_LADs$idx)],
+                                  T ~ bins_LADs$LAD_number[match(idx2, bins_LADs$idx)])) %>%
+    rename_at(3, ~ as.character(metadata_hic$sample[i]))
+  x
+}
+
+x <- purrr::map(1:6, 
+                function(i) GetCentromereBins(i)) %>%
+  purrr::reduce(full_join)
+
+
+# Gather and plot
+x %>%
+  gather(sample, value, contains("IAA")) %>%
+  group_by(sample, seqnames1, LAD_number) %>%
+  dplyr::summarise(value = sum(value, na.rm = T)) %>%
+  ungroup() %>%
+  left_join(metadata_hic) %>%
+  mutate(experiment = paste0(condition, "_", replicate)) %>%
+  dplyr::select(seqnames1, LAD_number, value, experiment, class) %>%
+  spread(class, value) %>%
+  
+  # And plot
+  ggplot(aes(x = minusIAA, y = plusIAA)) +
+  rasterize(geom_point(alpha = 0.2, size = 1),
+            dpi = 300) +
+  geom_abline(slope = 1, intercept = 0, 
+              col = "red", linetype = "dashed") +
+  facet_grid(. ~ experiment) +
+  ggtitle("Interactions between centromeres and LADs\n(per chromosome)") +
+  scale_x_log10() +
+  scale_y_log10() +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+
+```
+
+This final figure should be sufficient: there is no difference in genome 
+interactions between centromeres (enriched for Ki-67) and LADs (often enriched
+for LaminB1). 
+
+
+### 7. Compartment score versus Ki-67 interactions
+
+Do I see a change in compartment score for the regions that were initially 
+bound by Ki-67. It is possible that a further decrease in replication timing
+coincides with a decrease in replication timing.
+
+```{r compartment score versus centromere}
+
+# Combine compartment scores 
+tib <- full_join(as_tibble(CS_out$compart_scores),
+                 as_tibble(CS_out_r2$compart_scores)) %>%
+  rename_at(1, ~ "seqnames") %>%
+  filter(seqnames %in% seqnames(centromeres)) %>%
+  mutate(start = start + 1)
+
+# Add distance to centromere
+tib$distance_to_centromere = as_tibble(distanceToNearest(as(tib, "GRanges"),
+                                                         centromeres,
+                                                         select = "arbitrary")) %>%
+  pull(distance) / 1e6
+
+# Calculate difference
+tib <- tib %>%
+  mutate(interphase_r1_diff = interphase_r1_minusIAA - interphase_r1_plusIAA,
+         interphase_r2_diff = interphase_r2_minusIAA - interphase_r2_plusIAA,
+         interphase_diff = (interphase_r1_diff + interphase_r2_diff)/2) %>%
+  dplyr::select(-contains("interphase_r"))
+
+
+
+
+# Summary per chromosome
+tib_summary <- tib %>%
+  filter(distance_to_centromere < 2) %>%
+  gather(key, value, contains("diff")) %>%
+  group_by(seqnames, key) %>%
+  summarise(mean = mean(value, na.rm = T)) %>%
+  ungroup() %>%
+  mutate(seqnames = factor(seqnames, chrom_sizes$seqnames),
+         rdna = seqnames %in% paste0("chr", c(13, 14, 15, 21, 22))) %>%
+  mutate(size = chrom_sizes$length[match(seqnames, 
+                                         chrom_sizes$seqnames)],
+         size = size / 1e6)
+## `summarise()` has grouped output by 'seqnames'. You can override using the `.groups` argument.
+
+# Plot
+tib_summary %>%
+  ggplot(aes(x = seqnames, y = mean, col = rdna, shape = rdna)) +
+  geom_point(size = 2) +
+  geom_hline(yintercept = 0, col = "black") +
+  xlab("") +
+  ylab("Compartment score difference near centromeres") +
+  scale_color_manual(values = c("grey20", "red")) +
+  theme_bw() +
+  theme(aspect.ratio = 1,
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+# Make boxplots
+tib_boxplots <- tib %>%
+  mutate(rdna = seqnames %in% paste0("chr", c(13:15, 21:22))) %>%
+  dplyr::select(seqnames, rdna, contains("distance"), contains("diff")) %>%
+  mutate(dis_group = as.numeric(cut(distance_to_centromere, 
+                                    breaks = seq(0, max(distance_to_centromere) + 1, 
+                                                 by = 0.5)))/2 - 0.5)
+
+# Plot as boxplots
+# First, calculate boxplots to have more control over ylimits
+tib_summary <- tib_boxplots %>%
+  #group_by(seqnames, rdna, dis_group) %>%
+  group_by(dis_group) %>%
+  drop_na() %>%
+  summarise(ymin = quantile(interphase_diff, 0.05), 
+            lower = quantile(interphase_diff, 0.25), 
+            middle = quantile(interphase_diff, 0.5), 
+            upper = quantile(interphase_diff, 0.75), 
+            ymax = quantile(interphase_diff, 0.95))
+
+tib_summary %>%
+  filter(dis_group <= 20) %>%
+  ggplot(aes(x = dis_group, ymin = ymin, lower = lower, middle = middle, 
+             upper = upper, ymax = ymax, group = dis_group, y = middle)) +
+  geom_boxplot(stat="identity", outlier.shape = NA, fill = "lightgrey", col = "black") +
+  geom_line(aes(y = middle, group = NULL), col = "red") +
+  geom_hline(yintercept = 0, col = "blue", linetype = "dashed") +
+  #facet_grid(. ~ seqnames, scales = "free_y") + 
+  xlab("Distance to centromere (Mb)") +
+  ylab("Difference in CS") +
+  #coord_cartesian(xlim = c(0, 30)) +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+```
+
+No effect on this.
+
+
+### 8. Trans-interactions along the chromosome arm
+
+I should still look into our original hypothesis based on the distal enrichment
+of Ki-67 on chromosome arms (that we now believe is due to a technical 
+artifact). Let's try it.
+
+```{r transinteractions along the chromosome, fig.width = 7, warning = F, message = F}
+
+PlotTransInteractionsPerChromosome <- function(chr) {
+  
+  # To do this, let's only use one chromosome and calculate the fraction of 
+  # trans-interactions for every Mb.
+  
+  # Select Hi-C bins of interest
+  bins <- list_hic[[1]]$IDX
+  bins <- as_tibble(bins, 
+                    .name_repair = ~ c("seqnames", "start", "end", "idx"))
+  
+  bins_chr <- bins %>% 
+    filter(seqnames == chr)
+  bins_other <- bins %>% 
+    filter(seqnames != chr)
+  
+  # Select data
+  GetAllInteractionsChr <- function(i) {
+    x <- as_tibble(list_hic[[i]]$MAT, 
+                   .name_repair = ~ c("idx1", "idx2", "score"))
+    
+    x1 <- x %>%
+      filter(idx1 %in% bins_chr$idx) %>%
+      mutate(transinteraction = ifelse(idx2 %in% bins_other$idx,
+                                       "trans", "cis")) %>%
+      mutate(match = match(idx1, bins$idx)) 
+    
+    x2 <- x %>%
+      filter(idx2 %in% bins_chr$idx) %>%
+      mutate(transinteraction = ifelse(idx1 %in% bins_other$idx,
+                                       "trans", "cis")) %>%
+      mutate(match = match(idx2, bins$idx)) 
+    
+    x_filtered <- bind_rows(x1, x2) %>%
+      mutate(seqnames = bins$seqnames[match],
+             start = bins$start[match],
+             end = bins$end[match]) %>%
+      mutate(start = start + 1) %>%
+      rename_at(3, ~ as.character(metadata_hic$sample[i]))
+    
+    x_filtered
+  }
+  
+  x <- purrr::map(1:6, 
+                  function(i) GetAllInteractionsChr(i)) %>%
+    purrr::reduce(full_join)
+  
+  
+  # Group by Mb distance & calculate fraction of trans-interactions
+  x_summary <- x %>%
+    dplyr::select(start, transinteraction, contains("IAA")) %>%
+    mutate(start_Mb = floor(start / 1e6)) %>%
+    gather(sample, value, contains("IAA")) %>%
+    group_by(sample, start_Mb, transinteraction) %>%
+    dplyr::summarise(value = sum(value, na.rm = T)) %>%
+    ungroup() %>%
+    spread(transinteraction, value) %>%
+    mutate(trans_fraction = trans / (trans + cis)) %>%
+    mutate() %>%
+    left_join(metadata_hic) %>%
+    mutate(experiment = paste0(condition, "_", replicate))
+  
+  # Positioning of centromere, in Mb
+  pos_centromere <- as_tibble(centromeres) %>% 
+    filter(seqnames == chr) %>% 
+    mutate(middle = (start + end) / 2 / 1e6) %>% 
+    pull(middle)
+  
+  
+  # Plot
+  plt1 <- x_summary %>%
+    ggplot(aes(x = start_Mb, y = trans_fraction, col = class)) +
+    geom_hline(yintercept = 0, col = "black") +
+    geom_vline(xintercept = pos_centromere, col = "black", linetype = "dashed") +
+    geom_line() +
+    facet_grid(. ~ experiment) +
+    scale_color_manual(values = c("grey20", "red")) +
+    xlab(paste0(chr, " (Mb)")) +
+    ylab("Fraction trans-interactions") +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+  
+  plot(plt1)
+  
+  
+  # Also, plot the ratio
+  plt2 <- x_summary %>%
+    dplyr::select(-sample, -cis, -trans, -file, -colour) %>%
+    spread(class, trans_fraction) %>%
+    mutate(ratio = log2(plusIAA / minusIAA)) %>%
+    ggplot(aes(x = start_Mb, y = ratio, col = condition, group = experiment)) +
+    geom_hline(yintercept = 0, col = "black") +
+    geom_vline(xintercept = pos_centromere, col = "black", linetype = "dashed") +
+    geom_line() +
+    scale_color_brewer(palette = "Set1") +
+    xlab(paste0(chr, " (Mb)")) +
+    ylab("Ratio +IAA / -IAA (log2)") +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+  
+  plot(plt2)
+  
+}
+
+
+PlotTransInteractionsPerChromosome("chr1")
+PlotTransInteractionsPerChromosome("chr2")
+PlotTransInteractionsPerChromosome("chr6")
+PlotTransInteractionsPerChromosome("chr11")
+PlotTransInteractionsPerChromosome("chr13")
+PlotTransInteractionsPerChromosome("chr19")
+PlotTransInteractionsPerChromosome("chr22")
+
+```
+
+There might be some enrichment of trans-interactions along the chromosome arms. 
+However, this is not consistent with the initial interaction data, that was 
+clearly enriched up to 25 Mb. 
+
+
+### 9. Ratio of trans-interactions vs distance to telomeres
+
+Make the same plots as for the pA-DamID data: for every chromosome, plot the
+scores in a smooth line from the telomere.
+
+```{r distance to telomere, warning = F, message = F}
+
+# Same procedure as before, but also looping over chromosomes
+GetAllInteractionsChr <- function(i) {
+  x <- as_tibble(list_hic[[i]]$MAT, 
+                 .name_repair = ~ c("idx1", "idx2", "score"))
+  
+  x1 <- x %>%
+    filter(idx1 %in% bins_chr$idx) %>%
+    mutate(transinteraction = ifelse(idx2 %in% bins_other$idx,
+                                     "trans", "cis")) %>%
+    mutate(match = match(idx1, bins$idx)) 
+  
+  x2 <- x %>%
+    filter(idx2 %in% bins_chr$idx) %>%
+    mutate(transinteraction = ifelse(idx1 %in% bins_other$idx,
+                                     "trans", "cis")) %>%
+    mutate(match = match(idx2, bins$idx)) 
+  
+  x_filtered <- bind_rows(x1, x2) %>%
+    mutate(seqnames = bins$seqnames[match],
+           start = bins$start[match],
+           end = bins$end[match]) %>%
+    mutate(start = start + 1) %>%
+    rename_at(3, ~ as.character(metadata_hic$sample[i]))
+  
+  x_filtered
+}
+
+
+
+x_all <- tibble() 
+
+for (chr in chromosomes) {
+  
+  # Select Hi-C bins of interest
+  bins <- list_hic[[1]]$IDX
+  bins <- as_tibble(bins, 
+                    .name_repair = ~ c("seqnames", "start", "end", "idx"))
+  
+  bins_chr <- bins %>% 
+    filter(seqnames == chr)
+  bins_other <- bins %>% 
+    filter(seqnames != chr)
+  
+  # Select data
+  x <- purrr::map(5:6, 
+                  function(i) GetAllInteractionsChr(i)) %>%
+    purrr::reduce(full_join)
+  
+  # Group by Mb distance & calculate fraction of trans-interactions
+  x_summary <- x %>%
+    dplyr::select(start, seqnames, transinteraction, contains("IAA")) %>%
+    mutate(start_Mb = floor(start / 1e6)) %>%
+    gather(sample, value, contains("IAA")) %>%
+    group_by(sample, seqnames, start_Mb, transinteraction) %>%
+    dplyr::summarise(value = sum(value, na.rm = T)) %>%
+    ungroup() %>%
+    spread(transinteraction, value) %>%
+    mutate(trans_fraction = trans / (trans + cis)) %>%
+    mutate() %>%
+    left_join(metadata_hic) %>%
+    mutate(experiment = paste0(condition, "_", replicate))
+  
+  x_all <- bind_rows(x_all, 
+                     x_summary %>%
+                       dplyr::select(sample, seqnames, start_Mb, trans_fraction,
+                                     condition, class, experiment))
+  
+}
+
+# Convert Mb distance back to bps and calculate log2-ratio
+x_gather <- x_all %>%
+  mutate(start = start_Mb * 1e6 + 1,
+         end = start_Mb * 1e6 + 1e6) %>%
+  dplyr::select(-sample, -start_Mb) %>%
+  spread(class, trans_fraction) %>%
+  mutate(ratio = log2(plusIAA / minusIAA))
+    
+  
+
+# Calculate distance to telomere
+# Also, prepare telomeres
+telomeres <- c(GRanges(seqnames = chromosomes,
+                       ranges = IRanges(start = 1, end = 1)),
+               GRanges(seqnames = chromosomes,
+                       ranges = IRanges(start = seqlengths(gr_padamid_combined)[chromosomes], 
+                                        end = seqlengths(gr_padamid_combined)[chromosomes])))
+seqinfo(telomeres) <- seqinfo(gr_padamid_combined)
+telomeres <- sort(telomeres)
+
+# Remove chrY
+x_gather <- x_gather[x_gather$seqnames %in% chromosomes, ]
+dis <- distanceToNearest(as(x_gather, "GRanges"), telomeres)
+x_gather$distance_to_telomere <- mcols(dis)$distance / 1e6
+
+# Prepare smooth line of all telomere distances separately
+x_gather %>%
+  dplyr::select(seqnames, distance_to_telomere, ratio) %>%
+  drop_na() %>%
+  filter(distance_to_telomere < 55) %>%
+  mutate(seqnames = factor(seqnames, chrom_sizes$seqnames)) %>%
+  ggplot(aes(x = distance_to_telomere, y = ratio, col = seqnames)) +
+  geom_smooth(method = "loess", se = F, span = 10) +
+  geom_vline(xintercept = 0) +
+  #geom_vline(xintercept = 25, linetype = "dashed") +
+  geom_hline(yintercept = 0) +
+  coord_cartesian(xlim = c(0, 50),
+                  ylim = c(0, 2)) +
+  theme_bw() +
+  theme(aspect.ratio = 1)  
+
+```
+
+
+### 10. Binned scatter plot
+
+Prepare a binned scatter plot of A/B compartment scores colored by Ki-67 levels.
+
+```{r binned scatter plot}
+
+# Prepare tibble of CS and add Ki-67
+tib_CS <- purrr::map(list(CS_out, 
+                          CS_out_r2,
+                          CS_out_mit),
+                     function(x) as_tibble(x$compart_scores)) %>%
+  purrr::reduce(full_join) %>%
+  mutate(start = start + 1) %>%
+  rename_at(1, ~"seqnames")
+
+ovl <- findOverlaps(as(tib_padamid_combined, "GRanges"),
+                    as(tib_CS, "GRanges")) %>%
+  as_tibble() %>%
+  mutate(HCT116_AID_Ki67 = tib_padamid_combined$HCT116_AID_doublethy_Ki67[.$queryHits]) %>%
+  group_by(subjectHits) %>%
+  dplyr::summarise(score = mean(HCT116_AID_Ki67, 
+                                na.rm = T)) %>%
+  ungroup()
+
+tib_CS$HCT116_AID_Ki67 <- NA
+tib_CS$HCT116_AID_Ki67[ovl$subjectHits] <- ovl$score
+
+# Calculate difference and mean in CS
+tib_CS <- tib_CS %>%
+  mutate(diff_r1 = tib_CS$interphase_r1_plusIAA - tib_CS$interphase_r1_minusIAA,
+         diff_r2 = tib_CS$interphase_r2_plusIAA - tib_CS$interphase_r2_minusIAA,
+         plusIAA_mean = (interphase_r1_plusIAA + interphase_r2_plusIAA)/2,
+         minusIAA_mean = (interphase_r1_minusIAA + interphase_r2_minusIAA)/2)
+
+
+# Scatter plot as before
+tib_dropna <- tib_CS %>% drop_na()
+
+PlotScatterBinned(tib_dropna, smooth = 3, identity = T,
+                  n1 = "minusIAA_mean", 
+                  n2 = "plusIAA_mean", 
+                  n_bins = 100,
+                  count_range = c(0, 1000))
+
+PlotScatterBinned(tib_dropna, smooth = 3, 
+                  identity = T,
+                  n1 = "minusIAA_mean", 
+                  n2 = "plusIAA_mean", 
+                  color_by = tib_dropna$HCT116_AID_Ki67, 
+                  n_bins = 100,
+                  ylimits_col = c(-2, 2))
+
+
+# By replicates
+PlotScatterBinned(tib_dropna, smooth = 3, 
+                  identity = T,
+                  n1 = "interphase_r1_minusIAA", 
+                  n2 = "interphase_r1_plusIAA", 
+                  color_by = tib_dropna$HCT116_AID_Ki67, 
+                  n_bins = 100,
+                  ylimits_col = c(-2, 2))
+
+PlotScatterBinned(tib_dropna, smooth = 3, 
+                  identity = T,
+                  n1 = "interphase_r2_minusIAA", 
+                  n2 = "interphase_r2_plusIAA", 
+                  color_by = tib_dropna$HCT116_AID_Ki67, 
+                  n_bins = 100,
+                  ylimits_col = c(-2, 2))
+
+```
+
+
+### Conclusions
+
+I cannot find any effect of Ki-67 on genome interactions in interphase. However,
+for mitotic cells Ki-67 prevents trans-interactions and very long-range 
+interactions.
+
+
+### Session info
+
+```{r save data}
+
+
+
+```
+
+```{r session info}
+sessionInfo()
+```
+

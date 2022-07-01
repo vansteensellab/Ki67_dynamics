@@ -1,0 +1,244 @@
+---
+title: "4DN DamID - Ki67 project - Gene expression hTERT-RPE"
+author: "Tom van Schaik"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output: 
+  html_document:
+    theme: journal #cerulean
+    highlight: monochrome
+    toc: true
+    toc_float: true
+    code_folding: show
+  editor_options:
+    chunk_output_type: console
+---
+
+### Project
+
+Mapping of Ki67 interactions with the genome and comparison with lamina 
+interactions.
+
+
+### Introduction
+
+Sun, 2017, generated RNA-seq data in hTERT-RPE cells after Ki67 depletion. This 
+resulted in ~2500 differentially expressed genes. This is linked to the p21
+response in these cells, which is inactive in HCT116 cells.
+
+I downloaded this data (hg19) and used gene symbols to get Ki67 interaction 
+scores. These I compare with the effect on gene expression, where you would
+expect that upregulated genes are initially enriched for Ki67.
+
+
+### Method
+
+Oops. See introduction.
+
+
+### Set-up
+
+Set the parameters and list the data.
+
+```{r set-up, warning = F, message = F, cache = T}
+
+# Load dependencies - without warnings / messages
+library(tidyverse)
+library(GenomicRanges)
+library(rtracklayer)
+library(ggplot2)
+library(RColorBrewer)
+
+# Prepare output 
+output_dir <- "ts220503_9_ki67_depletion_expression_rpe_sun_2017"
+dir.create(output_dir, showWarnings = FALSE)
+
+
+# Load input
+chromosomes <- c(paste0("chr", 1:22), "chrX")
+
+
+input_dir <- "ts220503_1_data_gathering"
+
+bin_size <- readRDS(file.path(input_dir, "bin_size.rds"))
+centromeres <- readRDS(file.path(input_dir, "centromeres.rds"))
+
+colors_set1 <- readRDS(file.path(input_dir, "colors_set1.rds"))
+colors_set2 <- readRDS(file.path(input_dir, "colors_set2.rds"))
+colors_set3 <- readRDS(file.path(input_dir, "colors_set3.rds"))
+
+tib_padamid_replicates <- readRDS(file.path(input_dir, 
+                                            "tib_padamid_replicates.rds"))
+tib_padamid_combined <- readRDS(file.path(input_dir, 
+                                          "tib_padamid_combined.rds"))
+
+gr_padamid_replicates <- readRDS(file.path(input_dir, 
+                                           "gr_padamid_replicates.rds"))
+gr_padamid_combined <- readRDS(file.path(input_dir, 
+                                         "gr_padamid_combined.rds"))
+
+tib_hmm_replicates <- readRDS(file.path(input_dir, "tib_hmm_replicates.rds"))
+tib_hmm_combined <- readRDS(file.path(input_dir, "tib_hmm_combined.rds"))
+
+padamid_metadata_replicates <- readRDS(file.path(input_dir, 
+                                                 "padamid_metadata_replicates.rds"))
+padamid_metadata_combined <- readRDS(file.path(input_dir, 
+                                               "padamid_metadata_combined.rds"))
+
+
+
+# Prepare seqnames
+chrom_sizes <- tibble(seqnames = seqlevels(gr_padamid_combined),
+                      length = seqlengths(gr_padamid_combined)) %>%
+  arrange(-length)
+
+
+# Scale pA-DamID scores?
+tib_padamid_combined <- tib_padamid_combined %>%
+  mutate_at(4:ncol(.), function(x) scale(x)[, 1]) %>%
+  filter(seqnames != "chrY")
+
+```
+
+```{r knits setup}
+library(knitr)
+opts_chunk$set(fig.width = 5, fig.height = 3.5, cache = T,
+               dev=c('png', 'pdf'), fig.path = file.path(output_dir, "figures/")) 
+pdf.options(useDingbats = FALSE)
+```
+
+```{r functions}
+
+quantiles <- function(x) {
+  # Use quantiles as boxplot boundaries
+  r <- quantile(x, probs = c(0.05, 0.25, 0.5, 0.75, 0.95))
+  names(r) <- c("ymin", "lower", "middle", "upper", "ymax")
+  r
+}
+
+```
+
+
+### 1. Read expression data
+
+```{r read expression data, cache = T}
+
+# Add new expression data - ts210726
+gene_expr_rpe <- read_csv(file.path(output_dir,
+                                    "sun_2017_rnaseq_hg19.csv"),
+                          skip = 1) %>%
+  rename_at(3, ~ "gene_name") %>%
+  dplyr::select(-locus) %>%
+  mutate(log2_fold_change = as.double(`log2(fold_change)`))
+
+
+```
+
+```{r add gene locations using gene names, cache = T}
+
+# Load genes
+genes <- readRDS("../ts191220_laminaVsNucleolus_NewAnalyses/ts200113_GeneExpression/genes.rds")
+
+# Add location to gene_expr objects
+genes_select <- as_tibble(genes) %>%
+  dplyr::select(seqnames, start, end, gene_name, gene_id) %>%
+  mutate(GeneSymbol = gene_name) %>%
+  mutate(gene_id = str_remove(gene_id, "\\..*"))
+
+gene_expr_rpe <- inner_join(gene_expr_rpe,
+                            genes_select %>% dplyr::select(-gene_id))
+
+# Convert to GRanges
+gr_gene_expr_rpe <- as(gene_expr_rpe, "GRanges")
+
+# Extend GRanges
+bin_size <- 50e3
+extend <- 1 * bin_size
+
+start(gr_gene_expr_rpe) <- start(gr_gene_expr_rpe) - extend
+end(gr_gene_expr_rpe) <- end(gr_gene_expr_rpe) + extend
+
+```
+
+
+### 2. Add Ki67 scores
+
+```{r add ki67 scores, cache = T}
+
+# Find overlap between DamID bins and genes
+ovl_rpe <- as_tibble(findOverlaps(gr_gene_expr_rpe, gr_padamid_combined))
+
+# Add Ki67 score of wildtype cells
+ovl_rpe <- ovl_rpe %>%
+  mutate(rpe = gr_padamid_combined$RPE_wt_Ki67[subjectHits],
+         hct116 = gr_padamid_combined$HCT116_wt_Ki67[subjectHits],
+         k562 = gr_padamid_combined$K562_wt_Ki67[subjectHits]) %>%
+  group_by(queryHits) %>%
+  dplyr::summarise(rpe = mean(rpe, na.rm = T),
+                   hct116 = mean(hct116, na.rm = T),
+                   k562 = mean(k562, na.rm = T))
+ovl_rpe$gene_id = gr_gene_expr_rpe$gene_id[ovl_rpe$queryHits]
+
+# Add scores to gene_expr objects
+gene_expr_rpe <- full_join(gene_expr_rpe, ovl_rpe)
+
+```
+
+
+### 3. Plot effect on expression vs Ki67 scores
+
+```{r plot ki67 scores, cache = T, fig.width = 5, fig.height = 3.5}
+
+# Plot
+plt <- gene_expr_rpe %>%
+  filter(log2_fold_change != Inf) %>%
+  drop_na(log2_fold_change, rpe) %>%
+  ggplot(aes(x = rpe, y = log2_fold_change)) + 
+  geom_point() +
+  geom_smooth(method = "lm", col = "red", se = F) +
+  ggtitle("RPE genes") +
+  xlab("Ki67 score (wt)") +
+  ylab("FC") +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+plot(plt)
+
+# Ki67 score for differentially expressed genes?
+plt <- gene_expr_rpe %>%
+  filter(status == "OK") %>%
+  mutate(gene_class = case_when(significant == "no" ~ "stable",
+                                log2_fold_change > 0 ~ "up",
+                                log2_fold_change < 0 ~ "down",
+                                T ~ "down")) %>%
+  ggplot(aes(x = gene_class, y = rpe, fill = gene_class)) +
+  stat_summary(fun.data = quantiles, geom = "boxplot") +
+  geom_hline(yintercept = 0, col = "black", linetype = "dashed") +
+  xlab("hTERT-RPE expression class") +
+  ylab("Ki67 score") +
+  scale_fill_manual(values = c("blue", "grey50", "red"), guide = "none") +
+  theme_bw() +
+  theme(aspect.ratio = 2,
+        axis.text.x = element_text(angle = 90, hjust = 1))
+plot(plt)
+
+```
+
+
+
+### Conclusions
+
+Also in hTERT-RPE cells, Ki67 levels are not correlated with differentially 
+expressed genes. Data: Sun, 2017.
+
+
+### Session info
+
+```{r save data}
+
+
+
+```
+
+```{r session info}
+sessionInfo()
+```
+
